@@ -1,0 +1,35 @@
+\documentclass[a4paper,10pt]{article}
+\usepackage{amssymb, amsmath}
+\DeclareMathOperator{\arcsinh}{arcsinh}
+
+\begin{document}
+
+\title{Analysis Formelsammlung}
+\author{Peter Merkert, Martin Thoma}
+\date{21. Februar 2012}
+
+\section{Grenzwerte}
+\begin{table}[ht]
+\begin{minipage}[b]{0.5\linewidth}\centering
+\begin{align*}
+  \lim_{x \to 0} \frac {\sin x}{x}  &= 1 \\
+  \lim_{x \to 0} \frac {e^x - 1}{x} &= 1 \\
+  \cos x &= \sum_{n = 0}^{\infty} (-1)^n \frac {x^{2n}}{(2n)!}
+\end{align*}
+\end{minipage}
+\hspace{0.5cm}
+\begin{minipage}[b]{0.5\linewidth}\centering
+\begin{align*}
+\cosh x = \frac {1}{2} (e^x + e^{-x}) &= \sum_{n = 0}^{\infty} \frac {x^{2n}}{(2n)!} \\
+\sinh x = \frac {1}{2} (e^x - e^{-x}) &= \sum_{n = 0}^{\infty} \frac {x^{2n + 1}}{(2n + 1)!}
+\end{align*}
+\end{minipage}
+\end{table}
+
+\section{Zusammenhänge}
+\begin{align*}
+  (\cos x)^2 + (\sin x)^2 &= 1 \\
+  (\cosh x)^2 - (\sinh x)^2 &= 1
+\end{align*}
+
+\end{document}

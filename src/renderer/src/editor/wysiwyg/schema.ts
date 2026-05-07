@@ -30,6 +30,8 @@ const nodes: { [name: string]: NodeSpec } = {
 
   section: {
     group: 'block',
+    // sectionTitle is required; everything after is regular block content
+    // (paragraphs, math, theorem callouts, bibliography, nested sections, …).
     content: 'sectionTitle (block | section)*',
     defining: true,
     attrs: {
@@ -186,6 +188,100 @@ const nodes: { [name: string]: NodeSpec } = {
     toDOM: () => ['li', 0]
   },
 
+  // Theorem-like environments (theorem, lemma, definition, proposition,
+  // corollary, remark, example, assumption, proof). Rendered as a callout
+  // with a coloured rule + bold "kind" label, body holds normal block
+  // content (paragraphs, math, lists). Round-trips by re-emitting
+  // \begin{kind}[title] ... \end{kind}.
+  theoremEnv: {
+    group: 'block',
+    content: '(paragraph | mathBlock | listBlock | rawLatex | figure)+',
+    defining: true,
+    attrs: {
+      kind: { default: 'theorem' },
+      label: { default: null as string | null },
+      title: { default: null as string | null }
+    },
+    parseDOM: [
+      {
+        tag: 'aside[data-theorem]',
+        getAttrs: (dom) => {
+          const el = dom as HTMLElement
+          return {
+            kind: el.dataset.kind ?? 'theorem',
+            label: el.dataset.label || null,
+            title: el.dataset.title || null
+          }
+        }
+      }
+    ],
+    toDOM: (node) => [
+      'aside',
+      {
+        'data-theorem': '',
+        'data-kind': node.attrs.kind as string,
+        ...(node.attrs.label ? { 'data-label': node.attrs.label as string } : {}),
+        ...(node.attrs.title ? { 'data-title': node.attrs.title as string } : {})
+      },
+      0
+    ]
+  },
+
+  // \begin{thebibliography}{99} ... \end{thebibliography} — a list of
+  // \bibitem{key} entries. Rendered with copy-key affordances; entries
+  // are first-class so the user can edit them inline rather than as
+  // raw LaTeX text.
+  bibliography: {
+    group: 'block',
+    content: 'bibitem*',
+    attrs: { widestLabel: { default: '' } },
+    parseDOM: [
+      {
+        tag: 'section[data-bibliography]',
+        getAttrs: (dom) => ({
+          widestLabel: (dom as HTMLElement).dataset.widestLabel ?? ''
+        })
+      }
+    ],
+    toDOM: (node) => [
+      'section',
+      {
+        'data-bibliography': '',
+        'data-widest-label': node.attrs.widestLabel as string
+      },
+      0
+    ]
+  },
+
+  bibitem: {
+    content: 'inline*',
+    attrs: {
+      key: { default: '' },
+      label: { default: null as string | null }
+    },
+    parseDOM: [
+      {
+        tag: 'div[data-bibitem]',
+        getAttrs: (dom) => {
+          const el = dom as HTMLElement
+          return {
+            key: el.dataset.key ?? '',
+            label: el.dataset.label || null
+          }
+        }
+      }
+    ],
+    toDOM: (node) => [
+      'div',
+      {
+        'data-bibitem': '',
+        'data-key': node.attrs.key as string,
+        ...(node.attrs.label ? { 'data-label': node.attrs.label as string } : {})
+      },
+      0
+    ]
+  },
+
   text: { group: 'inline' },
 
   mathInline: {
@@ -257,6 +353,27 @@ const marks: { [name: string]: MarkSpec } = {
   code: {
     parseDOM: [{ tag: 'code' }],
     toDOM: () => ['code', 0]
+  },
+  smallcaps: {
+    parseDOM: [{ style: 'font-variant=small-caps' }],
+    toDOM: () => ['span', { style: 'font-variant: small-caps' }, 0]
+  },
+  link: {
+    attrs: { href: { default: '' } },
+    inclusive: false,
+    parseDOM: [
+      {
+        tag: 'a[href]',
+        getAttrs: (dom) => ({
+          href: (dom as HTMLElement).getAttribute('href') ?? ''
+        })
+      }
+    ],
+    toDOM: (mark) => [
+      'a',
+      { href: mark.attrs.href as string, target: '_blank', rel: 'noreferrer' },
+      0
+    ]
   }
 }
 

@@ -338,7 +338,10 @@ body.preview-pane-resizing .main-content-wrapper {
   min-height: 100%;
   width: var(--paper-measure);
   max-width: 100%;
-  padding: var(--paper-margin-y) 24px;
+  /* Generous bottom padding so the cursor can sit in the comfortable
+     middle-of-viewport zone when typing at the end of the document,
+     and there's breathing room below the last line on short docs. */
+  padding: var(--paper-margin-y) 24px 40vh 24px;
   outline: none;
   color: var(--paper-text);
   font-family: var(--font-serif);
@@ -367,6 +370,16 @@ body.preview-pane-resizing .main-content-wrapper {
   padding: 1px 4px;
   background: var(--bg-secondary);
   border-radius: 3px;
+}
+.wysiwyg-editor .ProseMirror a {
+  color: var(--text-primary);
+  text-decoration: underline;
+  text-decoration-color: var(--text-tertiary);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.wysiwyg-editor .ProseMirror a:hover {
+  text-decoration-color: var(--text-primary);
 }
 .wysiwyg-editor .ProseMirror ul,
 .wysiwyg-editor .ProseMirror ol { padding-left: 1.5em; margin: 0.4em 0 0.9em 0; }
@@ -515,6 +528,130 @@ body.preview-pane-resizing .main-content-wrapper {
   border-radius: 4px;
   padding: 8px 10px;
   resize: vertical;
+}
+
+/* ── Theorem-like callouts (theorem, lemma, definition, …) ────────── */
+
+.wysiwyg-editor .ProseMirror aside[data-theorem] {
+  margin: 1em 0;
+  padding: 0.6em 14px;
+  border-left: 3px solid var(--text-tertiary);
+  background: var(--bg-secondary);
+  border-radius: 0 4px 4px 0;
+}
+.wysiwyg-editor .ProseMirror aside[data-theorem][data-kind='theorem'],
+.wysiwyg-editor .ProseMirror aside[data-theorem][data-kind='lemma'],
+.wysiwyg-editor .ProseMirror aside[data-theorem][data-kind='proposition'],
+.wysiwyg-editor .ProseMirror aside[data-theorem][data-kind='corollary'] {
+  border-left-color: #2563eb;
+}
+.wysiwyg-editor .ProseMirror aside[data-theorem][data-kind='definition'],
+.wysiwyg-editor .ProseMirror aside[data-theorem][data-kind='assumption'],
+.wysiwyg-editor .ProseMirror aside[data-theorem][data-kind='conjecture'] {
+  border-left-color: #16a34a;
+}
+.wysiwyg-editor .ProseMirror aside[data-theorem][data-kind='remark'],
+.wysiwyg-editor .ProseMirror aside[data-theorem][data-kind='note'],
+.wysiwyg-editor .ProseMirror aside[data-theorem][data-kind='observation'] {
+  border-left-color: #d97706;
+}
+.wysiwyg-editor .ProseMirror aside[data-theorem][data-kind='example'],
+.wysiwyg-editor .ProseMirror aside[data-theorem][data-kind='fact'],
+.wysiwyg-editor .ProseMirror aside[data-theorem][data-kind='claim'] {
+  border-left-color: #6366f1;
+}
+.wysiwyg-editor .ProseMirror aside[data-theorem][data-kind='proof'] {
+  border-left-color: var(--text-tertiary);
+  background: transparent;
+}
+.wysiwyg-editor .ProseMirror aside[data-theorem]::before {
+  content: attr(data-kind);
+  display: block;
+  font-family: var(--font-sans);
+  font-size: 0.75em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-primary);
+  margin-bottom: 0.4em;
+}
+.wysiwyg-editor .ProseMirror aside[data-theorem][data-title]::before {
+  content: attr(data-kind) ' (' attr(data-title) ')';
+}
+.wysiwyg-editor .ProseMirror aside[data-theorem] > p:first-of-type { margin-top: 0; }
+.wysiwyg-editor .ProseMirror aside[data-theorem] > p:last-of-type { margin-bottom: 0; }
+.wysiwyg-editor .ProseMirror aside[data-theorem][data-kind='proof'] > p:last-of-type::after {
+  content: ' \220E';
+  margin-left: 0.5em;
+  color: var(--text-tertiary);
+}
+
+/* ── Bibliography ─────────────────────────────────────────────────── */
+
+.wysiwyg-editor .ProseMirror section[data-bibliography] {
+  margin-top: 2em;
+  padding-top: 1em;
+  border-top: 1px solid var(--border-color);
+  counter-reset: bibitem;
+}
+.wysiwyg-editor .ProseMirror section[data-bibliography]::before {
+  content: 'References';
+  display: block;
+  font-size: 1.25em;
+  font-weight: 700;
+  margin-bottom: 0.6em;
+  font-family: var(--font-serif);
+}
+/* Each bibitem is a normal block (inline body flows naturally as prose).
+   The `[N]` marker lives in the left padding and the cite-key chip is
+   absolutely-positioned on the right so neither breaks the text flow.
+   Earlier we used `display: grid` with two pseudo-elements + the inline
+   children — but ProseMirror renders inline children directly inside
+   the bibitem element, and grid then treats each anonymous text run as
+   a separate grid item, fragmenting the entry across columns. */
+.wysiwyg-editor .ProseMirror div[data-bibitem] {
+  position: relative;
+  padding: 8px 130px 8px 36px;
+  border-radius: 4px;
+  counter-increment: bibitem;
+  font-size: 0.95em;
+  line-height: 1.45;
+  margin: 0;
+  min-height: 1.6em;
+}
+.wysiwyg-editor .ProseMirror div[data-bibitem]:hover { background: var(--bg-secondary); }
+.wysiwyg-editor .ProseMirror div[data-bibitem]::before {
+  content: '[' counter(bibitem) ']';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  width: 28px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  text-align: right;
+}
+.wysiwyg-editor .ProseMirror div[data-bibitem]::after {
+  content: attr(data-key);
+  position: absolute;
+  right: 8px;
+  top: 6px;
+  max-width: 110px;
+  font-family: var(--font-mono);
+  font-size: 0.75em;
+  color: var(--text-tertiary);
+  padding: 2px 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  cursor: pointer;
+  user-select: all;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wysiwyg-editor .ProseMirror div[data-bibitem]:hover::after {
+  color: var(--text-primary);
+  border-color: var(--text-tertiary);
 }
 
 /* ── View-mode toggle ─────────────────────────────────────────────── */

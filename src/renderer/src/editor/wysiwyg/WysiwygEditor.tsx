@@ -9,7 +9,7 @@ import { inputRules } from 'prosemirror-inputrules'
 import { latexSchema } from './schema'
 import { parseLatexToDoc } from './latex-to-doc'
 import { serializeDocToLatex } from './doc-to-latex'
-import { mathNodeView, mathBlockNodeView } from './nodeviews/MathNodeView'
+import { mathNodeView, mathBlockNodeView, setMathMacros } from './nodeviews/MathNodeView'
 import { figureNodeView } from './nodeviews/FigureNodeView'
 import { citationNodeView } from './nodeviews/CitationNodeView'
 import { crossRefNodeView } from './nodeviews/CrossRefNodeView'
@@ -37,6 +37,10 @@ export function WysiwygEditor(): React.JSX.Element {
         const parsed = await parseLatexToDoc(tex)
         if (cancelled) return
         doc = parsed.doc
+        // Hand the preamble's \newcommand / \DeclareMathOperator macros
+        // to KaTeX so user-defined notation (\norm, \E, \PP, \inner, …)
+        // renders instead of showing as red unknown-command text.
+        setMathMacros(parsed.mathMacros ?? {})
       } catch (err) {
         console.error('[wysiwyg] parse failed:', err)
         // Fallback: a single rawLatex block holding the whole file. The user

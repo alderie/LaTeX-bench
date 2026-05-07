@@ -3,6 +3,27 @@ import 'katex/dist/katex.min.css'
 import type { Node as PMNode } from 'prosemirror-model'
 import type { EditorView, NodeView, NodeViewConstructor } from 'prosemirror-view'
 
+// Per-paper KaTeX macros distilled from the document's preamble
+// (\newcommand, \DeclareMathOperator, …). Set by the WysiwygEditor when it
+// loads/reloads a paper. Module-scoped on purpose: every MathView in the
+// current document shares the same macro table, and reloading a different
+// paper replaces it wholesale.
+let currentMathMacros: Record<string, string> = {
+  '\\eqref': '\\href{###1}{(\\text{#1})}',
+  '\\label': '',
+  '\\nonumber': '',
+  '\\notag': ''
+}
+export function setMathMacros(macros: Record<string, string>): void {
+  currentMathMacros = {
+    '\\eqref': '\\href{###1}{(\\text{#1})}',
+    '\\label': '',
+    '\\nonumber': '',
+    '\\notag': '',
+    ...macros
+  }
+}
+
 class MathView implements NodeView {
   dom: HTMLElement
   contentDOM?: HTMLElement
@@ -35,13 +56,19 @@ class MathView implements NodeView {
 
   private render(): void {
     this.dom.replaceChildren()
-    const latex = stripWrappers(this.node.attrs.latex as string, this.displayMode)
+    const latex = stripWrappers((this.node.attrs.latex as string) ?? '', this.displayMode).trim()
     try {
       katex.render(latex, this.dom, {
         throwOnError: false,
         displayMode: this.displayMode,
-        output: 'html'
+        // KaTeX needs both HTML and MathML by default for `align*` and friends
+        // to lay out their alignment columns correctly. Forcing 'html' alone
+        // silently drops the intercolumn spacing on some envs.
+        strict: false,
+        macros: currentMathMacros
       })
+      this.dom.style.color = ''
+      this.dom.title = ''
     } catch (err) {
       this.dom.textContent = latex
       this.dom.style.color = 'var(--status-error)'
@@ -148,13 +175,13 @@ class MathView implements NodeView {
   }
 }
 
-// For block math the latex is stored as the full env text (e.g.
-// `\begin{equation}…\end{equation}`); KaTeX wants the inner body, so strip
-// the outer wrapper before rendering.
+// For block math the latex may be stored as a full delimited form. KaTeX
+// understands `\begin{equation}...\end{equation}`, `\begin{align*}...`, and
+// the other math envs natively in displayMode — DO NOT strip those, or
+// KaTeX loses alignment context and chokes on bare `&=` / `\\`. Only
+// strip `\[...\]` since KaTeX does NOT recognize those as delimiters.
 function stripWrappers(latex: string, displayMode: boolean): string {
   if (!displayMode) return latex
-  const m = /^\s*\\begin\{([a-z*]+)\}([\s\S]*?)\\end\{\1\}\s*$/.exec(latex)
-  if (m) return m[2].trim()
   const dm = /^\s*\\\[([\s\S]*?)\\\]\s*$/.exec(latex)
   if (dm) return dm[1].trim()
   return latex

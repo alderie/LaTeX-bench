@@ -58,9 +58,45 @@ function serializeBlock(node: PMNode): string {
       return `\n${(node.attrs.source as string).trim()}\n`
     case 'listBlock':
       return serializeList(node)
+    case 'theoremEnv':
+      return serializeTheorem(node)
+    case 'bibliography':
+      return serializeBibliography(node)
     default:
-      return ''
+      // Defensive: an unrecognized node type would otherwise be silently
+      // serialized as empty, which deletes the user's content the next
+      // time the WYSIWYG view writes back. Throw instead so the editor's
+      // try/catch in dispatchTransaction logs and skips the save.
+      throw new Error(
+        `[doc-to-latex] no serializer for node type "${node.type.name}". ` +
+          `Refusing to write — this would silently drop content from the .tex file.`
+      )
   }
+}
+
+function serializeTheorem(node: PMNode): string {
+  const kind = (node.attrs.kind as string) || 'theorem'
+  const title = node.attrs.title as string | null
+  const label = node.attrs.label as string | null
+  let body = ''
+  node.forEach((child) => {
+    body += serializeBlock(child)
+  })
+  const open = title ? `\\begin{${kind}}[${title}]` : `\\begin{${kind}}`
+  const lbl = label ? `\\label{${label}}` : ''
+  return `\n${open}${lbl}\n${body.trim()}\n\\end{${kind}}\n`
+}
+
+function serializeBibliography(node: PMNode): string {
+  const widest = (node.attrs.widestLabel as string) || '99'
+  const items: string[] = []
+  node.forEach((item) => {
+    const key = (item.attrs.key as string) || ''
+    const label = item.attrs.label as string | null
+    const head = label ? `\\bibitem[${label}]{${key}}` : `\\bibitem{${key}}`
+    items.push(`${head} ${serializeInline(item).trim()}`)
+  })
+  return `\n\\begin{thebibliography}{${widest}}\n${items.join('\n\n')}\n\\end{thebibliography}\n`
 }
 
 function serializeFigure(node: PMNode): string {
@@ -121,14 +157,21 @@ function serializeInlineChild(node: PMNode): string {
 const MARK_MACRO: Record<string, string> = {
   em: 'emph',
   strong: 'textbf',
-  code: 'texttt'
+  code: 'texttt',
+  smallcaps: 'textsc'
 }
 
 function wrapMarks(text: string, marks: readonly Mark[]): string {
   if (marks.length === 0) return text
   let result = text
   for (const mark of marks) {
-    const macro = MARK_MACRO[mark.type.name]
+    const name = mark.type.name
+    if (name === 'link') {
+      const href = (mark.attrs.href as string) || ''
+      result = href ? `\\href{${href}}{${result}}` : result
+      continue
+    }
+    const macro = MARK_MACRO[name]
     if (macro) result = `\\${macro}{${result}}`
   }
   return result
@@ -138,9 +181,18 @@ function escapeLatex(s: string): string {
   // Minimal LaTeX escaping for special characters that aren't already
   // wrapped in math/raw nodes. Keep this conservative — over-escaping
   // breaks valid LaTeX in user input.
+  //
+  // Round-trip notes: the parser maps `~` → U+00A0, `--` → U+2013, `---`
+  // → U+2014 so the WYSIWYG view reads as prose. We reverse those here so
+  // the .tex source keeps its idiomatic shortcuts on save.
+  // Order matters: escape literal `~` BEFORE turning U+00A0 into `~`, so
+  // round-tripped nbsps don't get re-escaped as \textasciitilde{}.
   return s
     .replace(/\\/g, '\\textbackslash{}')
     .replace(/([&%$#_{}])/g, '\\$1')
     .replace(/~/g, '\\textasciitilde{}')
     .replace(/\^/g, '\\textasciicircum{}')
+    .replace(/—/g, '---')
+    .replace(/–/g, '--')
+    .replace(/ /g, '~')
 }

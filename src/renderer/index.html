@@ -1,0 +1,40 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>synthetic-corbato</title>
+    <link rel="preload" href="./src/assets/fonts/Inter-VariableFont_opsz,wght.ttf" as="font" type="font/ttf" crossorigin />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self' paper:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: paper:; font-src 'self' data:; frame-src 'self' data: blob: paper:; object-src 'self' data: blob: paper:; connect-src 'self' paper:;"
+    />
+    <style>
+      :root { --boot-bg: #ffffff; --boot-fg: #a0a0a5; }
+      :root[data-theme='dark'] { --boot-bg: #1a1a1c; --boot-fg: #6e6e75; }
+      html, body { margin: 0; padding: 0; background: var(--boot-bg); }
+      body { overflow: hidden; }
+      #root { width: 100vw; height: 100vh; }
+      .boot-skeleton {
+        width: 100vw; height: 100vh;
+        display: flex; align-items: center; justify-content: center;
+        background: var(--boot-bg);
+      }
+      .boot-skeleton__spinner {
+        width: 20px; height: 20px;
+        color: var(--boot-fg);
+        animation: boot-skeleton-spin 1s linear infinite;
+      }
+      @keyframes boot-skeleton-spin { 100% { transform: rotate(360deg); } }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <div class="boot-skeleton">
+        <svg class="boot-skeleton__spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+        </svg>
+      </div>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

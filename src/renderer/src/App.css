@@ -1,0 +1,964 @@
+/* ── Top-level shell ──────────────────────────────────────────────────
+   Mirrors task-app: a flex row of [SidePanel | MainContent], with a
+   fixed-position right-side preview panel that slides in/out and resizes
+   via a left-edge drag handle (the same pattern as ArtifactSidePanel).
+*/
+
+:root {
+  --preview-width: 480px;
+  --sidebar-width: 240px;
+}
+
+.app {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
+
+/* The main content takes whatever the sidebar leaves AND shrinks further
+   when the preview panel is docked, so the editor can never slide under
+   the preview. */
+.main-content-wrapper {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-primary);
+  margin-right: 0;
+  transition: margin-right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.app--preview-open .main-content-wrapper {
+  margin-right: var(--preview-width);
+}
+
+.app--preview-fullscreen .main-content-wrapper {
+  margin-right: 100vw;
+}
+
+/* Drag-resize feedback: kill the transition so width tracks pointer 1:1. */
+body.preview-pane-resizing .main-content-wrapper {
+  transition: none;
+}
+
+/* ── Side panel (paper list) ──────────────────────────────────────── */
+
+.side-panel {
+  width: var(--sidebar-width);
+  height: 100vh;
+  background: var(--panel-bg);
+  border-right: 1px solid var(--panel-border);
+  overflow: hidden;
+  flex-shrink: 0;
+  z-index: 50;
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.side-panel-inner {
+  width: var(--sidebar-width);
+  min-width: var(--sidebar-width);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  white-space: nowrap;
+  transform: translateX(calc(-1 * var(--sidebar-width)));
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.side-panel--open .side-panel-inner {
+  transform: translateX(0);
+}
+
+.side-panel:not(.side-panel--open) {
+  width: 0;
+  border-right: none;
+}
+
+.side-panel__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 8px 0 14px;
+  height: 60px;
+  flex-shrink: 0;
+  -webkit-app-region: drag;
+}
+
+.side-panel__heading {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+  font-weight: 600;
+}
+
+.side-panel__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  -webkit-app-region: no-drag;
+}
+
+.side-panel__list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 8px 16px 8px;
+}
+
+.side-panel__item {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  padding: 6px 10px;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--text-primary);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  cursor: pointer;
+  border-radius: 6px;
+  margin-bottom: 1px;
+  transition: background 0.12s ease;
+}
+
+.side-panel__item:hover {
+  background: var(--overlay-hover);
+}
+
+.side-panel__item--active {
+  background: var(--overlay-hover);
+}
+
+.side-panel__item-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.side-panel__item-meta {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.side-panel__empty {
+  padding: 20px 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+/* ── Main header ──────────────────────────────────────────────────── */
+
+.main-header {
+  height: 60px;
+  display: flex;
+  align-items: center;
+  /* 12px so the visible-glyph-to-text gap matches the title-to-save-chip
+     gap (icon button has a 28px bounding box around a ~14px glyph, so a
+     box-to-box gap looks tight compared to text-to-chip). */
+  gap: 12px;
+  /* Reserve ~148px on the right for the Windows titleBarOverlay buttons
+     (min/max/close) so action icons never slide under them. On macOS the
+     traffic-light buttons are top-left, so we mirror with left padding only
+     when the sidebar is closed (handled below). */
+  padding: 0 148px 0 12px;
+  flex-shrink: 0;
+  -webkit-app-region: drag;
+  background: var(--bg-primary);
+  border-bottom: 1px solid var(--border-color);
+  z-index: 200;
+}
+
+/* macOS: traffic lights live in the top-left ~70px. Push the panel-toggle
+   over so it doesn't sit under them. */
+.platform-darwin .main-header {
+  padding-left: 80px;
+}
+.platform-darwin .side-panel--open ~ .main-content-wrapper .main-header {
+  padding-left: 12px;
+}
+
+.main-header__title {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin-right: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.main-header__paper {
+  font-family: var(--font-sans);
+  font-style: normal;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1;
+}
+
+/* Saved/saving chip — matches the rounding and height of icon-buttons
+   and the view-mode toggle so the header reads as one row of equal-
+   weight controls. Spacing on either side comes from the parent's
+   `gap`, so it ends up symmetric with the sidebar-toggle ↔ title gap. */
+.save-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+  flex-shrink: 0;
+}
+.save-indicator__spin {
+  animation: save-indicator-spin 0.9s linear infinite;
+}
+@keyframes save-indicator-spin {
+  to { transform: rotate(360deg); }
+}
+
+.main-header__spacer {
+  flex: 1;
+}
+
+.main-header__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  -webkit-app-region: no-drag;
+}
+
+/* Icon button — matches task-app's side-panel-icon-btn / panel-toggle-open. */
+
+.icon-button {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s ease, color 0.15s ease, width 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease, padding 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  -webkit-app-region: no-drag;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+/* Sidebar header sometimes wants a slightly larger hit area. */
+.side-panel__header .icon-button {
+  width: 32px;
+  height: 32px;
+}
+.icon-button:hover {
+  background: var(--overlay-hover);
+  color: var(--text-primary);
+}
+.icon-button--hidden {
+  opacity: 0;
+  pointer-events: none;
+  width: 0;
+  padding: 0;
+  overflow: hidden;
+}
+.icon-button--active {
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+}
+
+/* ── Editor pane ──────────────────────────────────────────────────── */
+
+.editor-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-primary);
+}
+
+.editor-pane__placeholder {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+  color: var(--text-tertiary);
+  font-family: var(--font-serif);
+  font-size: 16px;
+  font-style: italic;
+}
+
+.editor-pane__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.source-editor {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+}
+.source-editor > .cm-editor {
+  flex: 1;
+  min-height: 0;
+}
+
+/* ── WYSIWYG editor ───────────────────────────────────────────────── */
+
+.wysiwyg-editor {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--paper-bg);
+  display: flex;
+  justify-content: center;
+}
+
+.wysiwyg-editor .ProseMirror {
+  min-height: 100%;
+  width: var(--paper-measure);
+  max-width: 100%;
+  padding: var(--paper-margin-y) 24px;
+  outline: none;
+  color: var(--paper-text);
+  font-family: var(--font-serif);
+  font-size: var(--paper-body-size);
+  line-height: var(--paper-line-height);
+  font-feature-settings: 'onum', 'liga', 'kern';
+  text-rendering: optimizeLegibility;
+}
+.wysiwyg-editor .ProseMirror p { margin: 0 0 0.9em 0; text-align: justify; hyphens: auto; }
+.wysiwyg-editor .ProseMirror h1,
+.wysiwyg-editor .ProseMirror h2,
+.wysiwyg-editor .ProseMirror h3 {
+  font-family: var(--font-serif);
+  font-weight: 700;
+  margin: 1.6em 0 0.6em 0;
+  line-height: 1.2;
+}
+.wysiwyg-editor .ProseMirror h1 { font-size: 1.55em; }
+.wysiwyg-editor .ProseMirror h2 { font-size: 1.25em; }
+.wysiwyg-editor .ProseMirror h3 { font-size: 1.05em; }
+.wysiwyg-editor .ProseMirror em { font-style: italic; }
+.wysiwyg-editor .ProseMirror strong { font-weight: 700; }
+.wysiwyg-editor .ProseMirror code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  padding: 1px 4px;
+  background: var(--bg-secondary);
+  border-radius: 3px;
+}
+.wysiwyg-editor .ProseMirror ul,
+.wysiwyg-editor .ProseMirror ol { padding-left: 1.5em; margin: 0.4em 0 0.9em 0; }
+.wysiwyg-editor .ProseMirror li { margin: 0.2em 0; }
+.wysiwyg-editor .ProseMirror :focus { outline: none; }
+
+/* Math nodes — render inline alongside text, no extra padding so the
+   baseline stays aligned with the surrounding prose. */
+.math-inline {
+  display: inline;
+  cursor: pointer;
+  border-radius: 2px;
+}
+.math-inline:hover { background: var(--overlay-hover); }
+.math-block {
+  display: block;
+  margin: 1em 0;
+  padding: 6px 8px;
+  text-align: center;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.math-block:hover { background: var(--overlay-hover); }
+
+/* Inline math editor — looks like a flowing inline chip, no textarea
+   chrome, baseline-aligned with surrounding prose. */
+.math-inline__editor {
+  display: inline-block;
+  vertical-align: baseline;
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  line-height: 1.4;
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  border: 1px solid transparent;
+  border-radius: 3px;
+  padding: 0 4px;
+  margin: 0;
+  outline: none;
+  resize: none;
+  /* Auto-size to content in modern Chromium (Electron 39 = Chromium 132). */
+  field-sizing: content;
+  /* Sensible bounds so an empty input still has a target, and very long
+     formulas wrap in the next paragraph instead of pushing layout. */
+  min-width: 32px;
+  max-width: 100%;
+  /* WebKit's spellcheck red squigglies leak through field-sizing — disable
+     the appearance fallback styling for consistency. */
+  appearance: none;
+  -webkit-appearance: none;
+  box-shadow: none;
+}
+.math-inline__editor:focus {
+  border-color: var(--border-color);
+  background: var(--bg-primary);
+}
+
+/* Block math editor — full-width, auto-grows by row, no resize grip. */
+.math-block__editor {
+  display: block;
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  line-height: 1.5;
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 8px 10px;
+  outline: none;
+  resize: none;
+  overflow: hidden;
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  box-shadow: none;
+}
+.math-block__editor:focus {
+  border-color: var(--border-color);
+  background: var(--bg-primary);
+}
+
+.figure-block { margin: 1.2em 0; text-align: center; }
+.figure-block__image { max-width: 100%; border: 1px solid var(--border-color); background: var(--bg-secondary); }
+.figure-block__image--empty { display: inline-block; width: 320px; height: 180px; }
+.figure-block__caption { margin-top: 8px; font-size: 0.9em; color: var(--text-secondary); }
+
+.citation-chip,
+.cross-ref-chip {
+  display: inline-block;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  padding: 0 6px;
+  border-radius: 3px;
+  margin: 0 1px;
+  cursor: pointer;
+}
+
+.raw-latex-block {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  padding: 8px 12px;
+  border-radius: 4px;
+  margin: 1em 0;
+  white-space: pre-wrap;
+  cursor: text;
+}
+.raw-latex-block__editor {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  width: 100%;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 8px 12px;
+  resize: vertical;
+}
+
+.preamble-block { margin: 0 0 1.5em 0; font-family: var(--font-mono); }
+.preamble-block__header {
+  width: 100%;
+  text-align: left;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  border: 0;
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+.preamble-block__header:hover { background: var(--overlay-hover); }
+.preamble-block__editor {
+  width: 100%;
+  margin-top: 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+/* ── View-mode toggle ─────────────────────────────────────────────── */
+
+.view-mode-toggle {
+  display: inline-flex;
+  background: var(--bg-secondary);
+  border-radius: 6px;
+  padding: 2px;
+  height: 28px;
+  align-items: center;
+}
+
+.view-mode-toggle__btn {
+  background: transparent;
+  border: 0;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  -webkit-app-region: no-drag;
+}
+
+.view-mode-toggle__btn--active {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ── Status pill ──────────────────────────────────────────────────── */
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  border: 0;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+button.status-pill:hover { background: var(--overlay-hover); }
+
+.status-pill__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+.status-pill--ok .status-pill__dot { background: var(--status-ok); }
+.status-pill--err .status-pill__dot { background: var(--status-error); }
+
+/* ── Preview pane (PDF) ──────────────────────────────────────────────
+   Fixed-positioned, slides in from the right, drag-handle on its inner
+   edge. Mirrors ArtifactSidePanel down to the keyframe + cursor styling. */
+
+.preview-pane {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: var(--preview-width);
+  background: var(--bg-primary);
+  border-left: 1px solid var(--border-color);
+  box-shadow: -4px 0 16px -4px rgba(0, 0, 0, 0.06);
+  display: flex;
+  flex-direction: column;
+  z-index: 150;
+  animation: preview-pane-slide 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.app--preview-fullscreen .preview-pane {
+  width: 100vw;
+}
+
+@keyframes preview-pane-slide {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+
+.preview-pane__resize-handle {
+  position: absolute;
+  left: -4px;
+  top: 0;
+  bottom: 0;
+  width: 9px;
+  cursor: col-resize;
+  z-index: 2;
+  touch-action: none;
+  -webkit-app-region: no-drag;
+}
+.preview-pane__resize-handle::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border-color);
+  transition: background 0.15s, width 0.15s, left 0.15s;
+}
+.preview-pane__resize-handle:hover::before,
+body.preview-pane-resizing .preview-pane__resize-handle::before {
+  background: var(--text-secondary);
+  width: 2px;
+  left: 3.5px;
+}
+body.preview-pane-resizing { cursor: col-resize; user-select: none; }
+
+.preview-pane__header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* Reserve room on the right for Windows titleBarOverlay (~138px). */
+  padding: 0 148px 0 14px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+  height: 60px;
+  background: var(--bg-primary);
+  z-index: 1;
+  -webkit-app-region: drag;
+}
+
+.preview-pane__title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+  font-weight: 600;
+  flex: 1;
+}
+
+.preview-pane__body {
+  flex: 1;
+  overflow: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  background: #c7c7cd;
+}
+:root[data-theme='dark'] .preview-pane__body { background: #0f0f10; }
+
+.preview-pane__placeholder {
+  flex: 1;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: var(--text-secondary);
+  font-family: var(--font-serif);
+  font-size: 14px;
+  font-style: italic;
+  padding: 24px;
+  background: var(--bg-primary);
+  border-radius: 6px;
+}
+
+.preview-pane__error {
+  align-self: stretch;
+  background: var(--bg-primary);
+  color: var(--status-error);
+  padding: 12px 16px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+}
+
+.preview-pane__page {
+  background: var(--paper-bg);
+  box-shadow: 0 4px 16px -4px rgba(0, 0, 0, 0.25);
+  display: block;
+  margin: 0 auto;
+}
+
+.preview-pane__build-status {
+  border-top: 1px solid var(--border-color);
+  padding: 8px 12px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-primary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Command palette ─────────────────────────────────────────────── */
+
+.command-palette__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.32);
+  backdrop-filter: blur(2px);
+  z-index: 200;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 14vh;
+}
+
+.command-palette {
+  position: relative;
+  width: min(640px, 92vw);
+  max-height: 60vh;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px -8px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.command-palette__input {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 12px 14px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-color);
+  outline: none;
+}
+
+.command-palette__list { flex: 1; overflow-y: auto; padding: 6px 0; }
+.command-palette__group { padding: 6px 0; }
+.command-palette__group [cmdk-group-heading] {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-tertiary);
+  padding: 6px 14px 4px 14px;
+}
+.command-palette__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--text-primary);
+}
+.command-palette__item[data-selected='true'] { background: var(--overlay-hover); }
+.command-palette__empty { padding: 12px 14px; color: var(--text-tertiary); font-size: 13px; }
+
+.command-palette__esc {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font: inherit;
+  font-size: 10px;
+  color: var(--text-tertiary);
+  background: var(--bg-secondary);
+  border: 0;
+  border-radius: 4px;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+
+/* ── Symbol palette ───────────────────────────────────────────────── */
+
+.symbol-palette__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.32);
+  z-index: 200;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 14vh;
+}
+
+.symbol-palette {
+  width: min(720px, 92vw);
+  max-height: 70vh;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.symbol-palette__input {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--border-color);
+  background: transparent;
+  font: inherit;
+  font-size: 14px;
+  color: var(--text-primary);
+  padding: 12px 14px;
+  outline: none;
+}
+
+.symbol-palette__groups { overflow-y: auto; padding: 8px 12px 16px 12px; }
+.symbol-palette__group { margin: 8px 0; }
+.symbol-palette__group-heading {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-tertiary);
+  margin: 8px 4px 6px 4px;
+}
+.symbol-palette__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: 4px;
+}
+.symbol-palette__cell {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 6px 4px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  font-family: var(--font-mono);
+}
+.symbol-palette__cell:hover { border-color: var(--border-color); background: var(--overlay-hover); }
+.symbol-palette__preview {
+  font-size: 16px;
+  min-height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.symbol-palette__name { font-size: 9px; color: var(--text-tertiary); font-family: var(--font-mono); }
+
+/* ── MCP indicator (floating bottom-right) ───────────────────────── */
+
+.mcp-indicator {
+  position: fixed;
+  bottom: 14px;
+  right: 18px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  z-index: 160;
+  -webkit-app-region: no-drag;
+  transition: right 0.3s cubic-bezier(0.4, 0, 0.2, 1), background 0.15s ease, color 0.15s ease, opacity 0.2s ease;
+}
+.mcp-indicator:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+.mcp-indicator--shifted {
+  right: calc(var(--preview-width) + 14px);
+}
+.mcp-indicator--hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+.mcp-indicator__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+.mcp-indicator--ok .mcp-indicator__dot { background: var(--status-ok); }
+.mcp-indicator--err .mcp-indicator__dot { background: var(--status-error); }
+
+/* Drag-resize: track pointer 1:1, kill the transition. */
+body.preview-pane-resizing .mcp-indicator { transition: none; }
+
+/* ── Find bar ─────────────────────────────────────────────────────── */
+
+.find-bar {
+  position: fixed;
+  top: 70px;
+  right: 14px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 4px 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  box-shadow: var(--shadow-sm);
+  z-index: 180;
+}
+.app--preview-open .find-bar {
+  right: calc(var(--preview-width) + 14px);
+}
+
+.find-bar__input {
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-primary);
+  padding: 4px 6px;
+  width: 200px;
+  outline: none;
+}
+.find-bar__toggle {
+  background: transparent;
+  border: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 2px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.find-bar__toggle--active { background: var(--bg-secondary); color: var(--text-primary); }
+.find-bar__nav {
+  background: transparent;
+  border: 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 2px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.find-bar__nav:hover { background: var(--overlay-hover); color: var(--text-primary); }

@@ -24,6 +24,10 @@ export function setMathMacros(macros: Record<string, string>): void {
   }
 }
 
+export function getMathMacros(): Record<string, string> {
+  return currentMathMacros
+}
+
 class MathView implements NodeView {
   dom: HTMLElement
   contentDOM?: HTMLElement

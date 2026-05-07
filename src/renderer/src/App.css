@@ -541,24 +541,159 @@ body.preview-pane-resizing .main-content-wrapper {
 .raw-latex-block {
   font-family: var(--font-mono);
   font-size: 0.85em;
+  line-height: 1.5;
   background: var(--bg-secondary);
   color: var(--text-secondary);
-  padding: 8px 12px;
-  border-radius: 4px;
-  margin: 1em 0;
-  white-space: pre-wrap;
-  cursor: text;
-}
-.raw-latex-block__editor {
-  font-family: var(--font-mono);
-  font-size: 0.85em;
-  width: 100%;
-  background: var(--bg-secondary);
-  color: var(--text-primary);
   border: 1px solid var(--border-color);
   border-radius: 4px;
   padding: 8px 12px;
-  resize: vertical;
+  margin: 1em 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  box-sizing: border-box;
+  width: 100%;
+  display: block;
+  cursor: text;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.raw-latex-block:hover {
+  border-color: var(--accent-color, var(--text-secondary));
+  background: var(--overlay-hover, var(--bg-secondary));
+}
+.raw-latex-block--editing {
+  padding: 0;
+  border-color: var(--accent-color, var(--text-primary));
+  background: var(--bg-secondary);
+}
+.raw-latex-block--editing:hover {
+  background: var(--bg-secondary);
+}
+.raw-latex-block__editor {
+  font-family: var(--font-mono);
+  font-size: inherit;
+  line-height: inherit;
+  background: transparent;
+  color: var(--text-primary);
+  border: 0;
+  border-radius: 4px;
+  padding: 8px 12px;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  box-sizing: border-box;
+  width: 100%;
+  display: block;
+  resize: none;
+  outline: none;
+  overflow: hidden;
+}
+
+/* Rich-rendered raw-LaTeX blocks (algorithm, tabular). The wrapper still
+   carries the editable border + hover affordance, but flips to a body
+   font, normalises whitespace, and gives the inner block room to breathe
+   without inheriting the monospace `pre-wrap` styling. */
+.raw-latex-block--rich {
+  font-family: var(--font-serif);
+  font-size: 1em;
+  color: var(--paper-text, var(--text-primary));
+  background: transparent;
+  white-space: normal;
+  word-break: normal;
+  cursor: pointer;
+  padding: 12px 16px;
+}
+.raw-latex-block--rich:hover {
+  background: var(--overlay-hover);
+}
+
+/* ── Tabular ────────────────────────────────────────────────────────── */
+.tabular-block-wrapper {
+  display: flex;
+  justify-content: center;
+  overflow-x: auto;
+}
+.tabular-block {
+  border-collapse: collapse;
+  margin: 0 auto;
+  font-family: var(--font-serif);
+  font-size: 0.95em;
+  color: inherit;
+}
+.tabular-block td {
+  padding: 4px 14px;
+  border: 0;
+  vertical-align: baseline;
+}
+.tabular-block__row--top-rule > td {
+  border-top: 1.5px solid currentColor;
+}
+.tabular-block__row--mid-rule > td {
+  border-top: 1px solid currentColor;
+}
+.tabular-block__row--bottom-rule > td {
+  border-top: 1.5px solid currentColor;
+}
+.tabular-block__row--has-bottom-rule > td {
+  border-bottom: 1.5px solid currentColor;
+}
+.tabular-block__cell--cmid {
+  border-top: 1px solid currentColor !important;
+}
+
+/* ── Algorithm ──────────────────────────────────────────────────────── */
+.algorithm-block {
+  font-family: var(--font-serif);
+  font-size: 0.95em;
+  border-top: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  padding: 6px 0;
+  color: inherit;
+}
+.algorithm-block__caption {
+  border-bottom: 0.5px solid currentColor;
+  padding: 0 4px 6px;
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+.algorithm-block__lines {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0 4px;
+}
+.algorithm-block__line {
+  display: grid;
+  grid-template-columns: 2.2em 1fr;
+  align-items: baseline;
+  line-height: 1.5;
+}
+.algorithm-block__line--comment {
+  color: var(--text-secondary);
+}
+.algorithm-block__lineno {
+  color: var(--text-tertiary);
+  text-align: right;
+  padding-right: 10px;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.85em;
+  user-select: none;
+}
+.algorithm-block__body {
+  min-width: 0;
+}
+.algorithm-block__keyword {
+  font-weight: 700;
+  font-variant: small-caps;
+  letter-spacing: 0.02em;
+}
+.algorithm-block__keyword--label {
+  font-variant: normal;
+  letter-spacing: 0;
+}
+.algorithm-block__keyword--comment {
+  font-weight: 400;
+  font-variant: normal;
+  font-style: italic;
 }
 
 .preamble-block { margin: 0 0 1.5em 0; font-family: var(--font-mono); }

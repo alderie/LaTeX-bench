@@ -1,5 +1,7 @@
 import type { Node as PMNode } from 'prosemirror-model'
 import type { EditorView, NodeView, NodeViewConstructor } from 'prosemirror-view'
+import { isAlgorithmSource, renderAlgorithm } from '../renderers/algorithm'
+import { isTabularSource, renderTabular } from '../renderers/tabular'
 
 class RawLatexView implements NodeView {
   dom: HTMLElement
@@ -10,7 +12,7 @@ class RawLatexView implements NodeView {
     private view: EditorView,
     private getPos: () => number | undefined
   ) {
-    this.dom = document.createElement('pre')
+    this.dom = document.createElement('div')
     this.dom.className = 'raw-latex-block'
     this.dom.contentEditable = 'false'
     this.render()
@@ -27,22 +29,60 @@ class RawLatexView implements NodeView {
   }
 
   private render(): void {
-    this.dom.textContent = (this.node.attrs.source as string) || '% (empty raw block)'
+    this.dom.replaceChildren()
+    this.dom.classList.remove('raw-latex-block--rich')
+    const source = (this.node.attrs.source as string) || ''
+    if (!source) {
+      this.dom.textContent = '% (empty raw block)'
+      return
+    }
+    if (isTabularSource(source)) {
+      this.dom.classList.add('raw-latex-block--rich')
+      this.dom.appendChild(renderTabular(source))
+      return
+    }
+    if (isAlgorithmSource(source)) {
+      this.dom.classList.add('raw-latex-block--rich')
+      this.dom.appendChild(renderAlgorithm(source))
+      return
+    }
+    // Plain raw-LaTeX fallback — preserve the pre-formatted whitespace
+    // look by setting `white-space: pre-wrap` on `.raw-latex-block` (CSS).
+    this.dom.textContent = source
   }
 
   private openEditor(): void {
+    const measuredHeight = this.dom.getBoundingClientRect().height
     this.editing = true
     this.dom.replaceChildren()
+    this.dom.classList.remove('raw-latex-block--rich')
+    this.dom.classList.add('raw-latex-block--editing')
     const ta = document.createElement('textarea')
     ta.className = 'raw-latex-block__editor'
     ta.value = this.node.attrs.source as string
-    ta.rows = Math.max(3, ta.value.split('\n').length)
+    ta.style.height = `${measuredHeight}px`
     this.dom.appendChild(ta)
-    requestAnimationFrame(() => ta.focus())
+
+    const autoSize = (): void => {
+      ta.style.height = '0px'
+      ta.style.height = `${ta.scrollHeight}px`
+    }
+    // Two rAFs: first lets the browser apply CSS, second measures correctly.
+    requestAnimationFrame(() => {
+      autoSize()
+      requestAnimationFrame(() => {
+        autoSize()
+        ta.focus()
+        ta.setSelectionRange(0, 0)
+        ta.scrollTop = 0
+      })
+    })
+    ta.addEventListener('input', autoSize)
 
     const commit = (): void => {
       const next = ta.value
       this.editing = false
+      this.dom.classList.remove('raw-latex-block--editing')
       const pos = this.getPos()
       if (typeof pos === 'number' && next !== this.node.attrs.source) {
         const tr = this.view.state.tr.setNodeMarkup(pos, undefined, {

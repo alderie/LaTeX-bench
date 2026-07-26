@@ -1,11 +1,8 @@
 /* ── Top-level shell ──────────────────────────────────────────────────
-   Mirrors task-app: a flex row of [SidePanel | MainContent], with a
-   fixed-position right-side preview panel that slides in/out and resizes
-   via a left-edge drag handle (the same pattern as ArtifactSidePanel).
+   A flex row of [SidePanel | MainContent].
 */
 
 :root {
-  --preview-width: 480px;
   --sidebar-width: 240px;
 }
 
@@ -16,30 +13,12 @@
   overflow: hidden;
 }
 
-/* The main content takes whatever the sidebar leaves AND shrinks further
-   when the preview panel is docked, so the editor can never slide under
-   the preview. */
 .main-content-wrapper {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
   background: var(--bg-primary);
-  margin-right: 0;
-  transition: margin-right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.app--preview-open .main-content-wrapper {
-  margin-right: var(--preview-width);
-}
-
-.app--preview-fullscreen .main-content-wrapper {
-  margin-right: 100vw;
-}
-
-/* Drag-resize feedback: kill the transition so width tracks pointer 1:1. */
-body.preview-pane-resizing .main-content-wrapper {
-  transition: none;
 }
 
 /* ── Side panel (paper list) ──────────────────────────────────────── */
@@ -524,6 +503,10 @@ body.preview-pane-resizing .main-content-wrapper {
 .figure-block__image { max-width: 100%; border: 1px solid var(--border-color); background: var(--bg-secondary); }
 .figure-block__image--empty { display: inline-block; width: 320px; height: 180px; }
 .figure-block__caption { margin-top: 8px; font-size: 0.9em; color: var(--text-secondary); }
+.figure-block__tag {
+  font-weight: 700;
+  color: var(--text-primary);
+}
 
 .citation-chip,
 .cross-ref-chip {
@@ -536,6 +519,98 @@ body.preview-pane-resizing .main-content-wrapper {
   border-radius: 3px;
   margin: 0 1px;
   cursor: pointer;
+}
+
+/* Resolved citations: small rounded chip, click jumps to the bibitem.
+   Numeric style (default) renders as `[1]`, `[1, 2]`, or `[1–3, 5]`.
+   Hover reveals the underlying key list via the title attribute. */
+.citation {
+  display: inline-block;
+  background: var(--bg-secondary);
+  color: var(--accent-color, var(--text-primary));
+  font-size: 0.88em;
+  padding: 0 6px;
+  border-radius: 8px;
+  margin: 0 1px;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background 0.12s ease;
+}
+.citation:hover {
+  background: var(--overlay-hover);
+}
+.citation--unresolved {
+  color: var(--status-error);
+  background: transparent;
+  border: 1px dashed var(--status-error);
+  border-radius: 6px;
+  padding: 0 4px;
+}
+
+/* Resolved cross-references render as plain inline text styled like a
+   subtle link — no chip, no border. Hover shows the underlying key in
+   the title attribute. Unresolved keys render in error red as `??`,
+   matching LaTeX's first-pass behaviour. */
+.cross-ref {
+  color: var(--accent-color, var(--text-primary));
+  text-decoration: none;
+  border-bottom: 1px dotted var(--text-tertiary);
+  cursor: pointer;
+}
+.cross-ref:hover {
+  border-bottom-color: var(--accent-color);
+}
+.cross-ref--unresolved {
+  color: var(--status-error);
+  border-bottom-color: var(--status-error);
+}
+
+/* ── Title block ───────────────────────────────────────────────────────
+   A LaTeX-style title rendered at the position of \maketitle. The fields
+   (title, authors, date) are real ProseMirror nodes — clickable and
+   editable inline; their content round-trips through the preamble. */
+[data-title-block] {
+  display: block;
+  margin: 1.5em 0 2em;
+  text-align: center;
+}
+.title-block__title {
+  font-family: var(--font-serif);
+  font-size: 1.7em;
+  line-height: 1.2;
+  font-weight: 600;
+  margin: 0 0 0.6em;
+  text-align: center;
+  color: var(--paper-text, var(--text-primary));
+}
+.title-block__authors {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 1.5em 2.5em;
+  margin: 0 0 0.6em;
+}
+.title-block__author {
+  font-family: var(--font-serif);
+  font-size: 1em;
+  line-height: 1.4;
+  text-align: center;
+  color: var(--paper-text, var(--text-primary));
+}
+.title-block__date {
+  font-family: var(--font-serif);
+  font-size: 0.95em;
+  color: var(--text-secondary);
+  text-align: center;
+}
+.title-block__date[data-kind='today']::before {
+  content: 'today';
+  font-style: italic;
+  color: var(--text-tertiary);
+}
+.title-block__date[data-kind='today']:not(:empty)::before {
+  content: '';
 }
 
 .raw-latex-block {
@@ -768,8 +843,16 @@ body.preview-pane-resizing .main-content-wrapper {
   color: var(--text-primary);
   margin-bottom: 0.4em;
 }
+/* When the registry has assigned this theorem a number, surface it
+   inline with the kind label: "Theorem 3.1". */
+.wysiwyg-editor .ProseMirror aside[data-theorem][data-number]::before {
+  content: attr(data-kind) ' ' attr(data-number);
+}
 .wysiwyg-editor .ProseMirror aside[data-theorem][data-title]::before {
   content: attr(data-kind) ' (' attr(data-title) ')';
+}
+.wysiwyg-editor .ProseMirror aside[data-theorem][data-number][data-title]::before {
+  content: attr(data-kind) ' ' attr(data-number) ' (' attr(data-title) ')';
 }
 .wysiwyg-editor .ProseMirror aside[data-theorem] > p:first-of-type { margin-top: 0; }
 .wysiwyg-editor .ProseMirror aside[data-theorem] > p:last-of-type { margin-bottom: 0; }
@@ -878,172 +961,6 @@ body.preview-pane-resizing .main-content-wrapper {
   background: var(--bg-primary);
   color: var(--text-primary);
   box-shadow: var(--shadow-sm);
-}
-
-/* ── Status pill ──────────────────────────────────────────────────── */
-
-.status-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font: inherit;
-  font-size: 11px;
-  color: var(--text-tertiary);
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--bg-secondary);
-  border: 0;
-  cursor: pointer;
-  -webkit-app-region: no-drag;
-}
-button.status-pill:hover { background: var(--overlay-hover); }
-
-.status-pill__dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--text-tertiary);
-}
-.status-pill--ok .status-pill__dot { background: var(--status-ok); }
-.status-pill--err .status-pill__dot { background: var(--status-error); }
-
-/* ── Preview pane (PDF) ──────────────────────────────────────────────
-   Fixed-positioned, slides in from the right, drag-handle on its inner
-   edge. Mirrors ArtifactSidePanel down to the keyframe + cursor styling. */
-
-.preview-pane {
-  position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: var(--preview-width);
-  background: var(--bg-primary);
-  border-left: 1px solid var(--border-color);
-  box-shadow: -4px 0 16px -4px rgba(0, 0, 0, 0.06);
-  display: flex;
-  flex-direction: column;
-  z-index: 150;
-  animation: preview-pane-slide 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.app--preview-fullscreen .preview-pane {
-  width: 100vw;
-}
-
-@keyframes preview-pane-slide {
-  from { transform: translateX(100%); }
-  to   { transform: translateX(0); }
-}
-
-.preview-pane__resize-handle {
-  position: absolute;
-  left: -4px;
-  top: 0;
-  bottom: 0;
-  width: 9px;
-  cursor: col-resize;
-  z-index: 2;
-  touch-action: none;
-  -webkit-app-region: no-drag;
-}
-.preview-pane__resize-handle::before {
-  content: '';
-  position: absolute;
-  left: 4px;
-  top: 0;
-  bottom: 0;
-  width: 1px;
-  background: var(--border-color);
-  transition: background 0.15s, width 0.15s, left 0.15s;
-}
-.preview-pane__resize-handle:hover::before,
-body.preview-pane-resizing .preview-pane__resize-handle::before {
-  background: var(--text-secondary);
-  width: 2px;
-  left: 3.5px;
-}
-body.preview-pane-resizing { cursor: col-resize; user-select: none; }
-
-.preview-pane__header {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  /* Reserve room on the right for Windows titleBarOverlay (~138px). */
-  padding: 0 148px 0 14px;
-  border-bottom: 1px solid var(--border-color);
-  flex-shrink: 0;
-  height: 60px;
-  background: var(--bg-primary);
-  z-index: 1;
-  -webkit-app-region: drag;
-}
-
-.preview-pane__title {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-tertiary);
-  font-weight: 600;
-  flex: 1;
-}
-
-.preview-pane__body {
-  flex: 1;
-  overflow: auto;
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  background: #c7c7cd;
-}
-:root[data-theme='dark'] .preview-pane__body { background: #0f0f10; }
-
-.preview-pane__placeholder {
-  flex: 1;
-  align-self: stretch;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  color: var(--text-secondary);
-  font-family: var(--font-serif);
-  font-size: 14px;
-  font-style: italic;
-  padding: 24px;
-  background: var(--bg-primary);
-  border-radius: 6px;
-}
-
-.preview-pane__error {
-  align-self: stretch;
-  background: var(--bg-primary);
-  color: var(--status-error);
-  padding: 12px 16px;
-  border-radius: 6px;
-  font-size: 12px;
-  font-family: var(--font-mono);
-  white-space: pre-wrap;
-}
-
-.preview-pane__page {
-  background: var(--paper-bg);
-  box-shadow: 0 4px 16px -4px rgba(0, 0, 0, 0.25);
-  display: block;
-  margin: 0 auto;
-}
-
-.preview-pane__build-status {
-  border-top: 1px solid var(--border-color);
-  padding: 8px 12px;
-  font-size: 11px;
-  color: var(--text-secondary);
-  background: var(--bg-primary);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-variant-numeric: tabular-nums;
 }
 
 /* ── Command palette ─────────────────────────────────────────────── */
@@ -1221,13 +1138,6 @@ body.preview-pane-resizing { cursor: col-resize; user-select: none; }
   background: var(--bg-secondary);
   color: var(--text-primary);
 }
-.mcp-indicator--shifted {
-  right: calc(var(--preview-width) + 14px);
-}
-.mcp-indicator--hidden {
-  opacity: 0;
-  pointer-events: none;
-}
 .mcp-indicator__dot {
   width: 6px;
   height: 6px;
@@ -1236,9 +1146,6 @@ body.preview-pane-resizing { cursor: col-resize; user-select: none; }
 }
 .mcp-indicator--ok .mcp-indicator__dot { background: var(--status-ok); }
 .mcp-indicator--err .mcp-indicator__dot { background: var(--status-error); }
-
-/* Drag-resize: track pointer 1:1, kill the transition. */
-body.preview-pane-resizing .mcp-indicator { transition: none; }
 
 /* ── Find bar ─────────────────────────────────────────────────────── */
 
@@ -1255,9 +1162,6 @@ body.preview-pane-resizing .mcp-indicator { transition: none; }
   gap: 4px;
   box-shadow: var(--shadow-sm);
   z-index: 180;
-}
-.app--preview-open .find-bar {
-  right: calc(var(--preview-width) + 14px);
 }
 
 .find-bar__input {

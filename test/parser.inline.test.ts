@@ -95,4 +95,28 @@ describe('parser — inline marks', () => {
     expect(cites).toHaveLength(1)
     expect(cites[0].attrs.keys).toEqual(['smith2020', 'jones2021'])
   })
+
+  it('captures \\citep / \\citet / \\Cref args even when unified-latex misses the signature', async () => {
+    // unified-latex doesn't always know natbib / cleveref macro signatures,
+    // so these would otherwise arrive as `<macro>` followed by a `<group>`
+    // sibling — the lookahead in inlineNodes folds the group in. Without
+    // it the bibtex keys leak into the paragraph as raw text.
+    const doc = await parseBody(
+      'See \\citep{a,b} and \\citet{c}; cf. \\Cref{thm:x} and \\cref{eq:y,eq:z}.'
+    )
+    const cites = allOfType(doc, 'citation')
+    expect(cites).toHaveLength(2)
+    expect(cites[0].attrs.keys).toEqual(['a', 'b'])
+    expect(cites[1].attrs.keys).toEqual(['c'])
+    const refs = allOfType(doc, 'crossRef')
+    expect(refs).toHaveLength(2)
+    expect(refs[0].attrs.cmd).toBe('Cref')
+    expect(refs[0].attrs.keys).toEqual(['thm:x'])
+    expect(refs[1].attrs.cmd).toBe('cref')
+    expect(refs[1].attrs.keys).toEqual(['eq:y', 'eq:z'])
+    // Critical: bibtex keys must not leak into the paragraph text.
+    expect(flatText(doc)).not.toContain('a,b')
+    expect(flatText(doc)).not.toContain('thm:x')
+    expect(flatText(doc)).not.toContain('eq:y,eq:z')
+  })
 })

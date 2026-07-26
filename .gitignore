@@ -9,3 +9,5 @@ preview
 *.tsbuildinfo
 .env
 .env.local
+
+.claude/*

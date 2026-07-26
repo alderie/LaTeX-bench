@@ -91,4 +91,49 @@ We \\cite{smith2020,jones2021,doe} cite multiple keys.
 `)
     expect(tex2).toContain('\\cite{smith2020,jones2021,doe}')
   })
+
+  it('round-trips title/author/date through the titleBlock', async () => {
+    const input = `\\documentclass{article}
+\\title{Convergence Guarantees}
+\\author{Alex Reyes \\and Priya Sundaram}
+\\date{\\today}
+\\begin{document}
+\\maketitle
+\\section{Intro}
+Hi.
+\\end{document}
+`
+    const { doc: d1 } = await parseLatexToDoc(input)
+    const tex2 = serializeDocToLatex(d1)
+    // Metadata went back into the preamble.
+    expect(tex2).toContain('\\title{Convergence Guarantees}')
+    expect(tex2).toContain('\\author{Alex Reyes \\and Priya Sundaram}')
+    expect(tex2).toContain('\\date{\\today}')
+    // \maketitle stays in the body.
+    expect(tex2).toContain('\\maketitle')
+    // No double-emit in the preamble (count occurrences).
+    const occurrences = tex2.split('\\title{Convergence Guarantees}').length - 1
+    expect(occurrences).toBe(1)
+
+    const { doc: d2 } = await parseLatexToDoc(tex2)
+    // Same single titleBlock survives the round-trip.
+    let titleBlockCount = 0
+    d2.descendants((n) => {
+      if (n.type.name === 'titleBlock') titleBlockCount++
+      return true
+    })
+    expect(titleBlockCount).toBe(1)
+  })
+
+  it('round-trips \\cref command name and multi-key form', async () => {
+    const { doc: _d1, tex2 } = await passes(`\\documentclass{article}
+\\begin{document}
+\\section{X}\\label{sec:x}
+\\begin{theorem}\\label{thm:y}Statement.\\end{theorem}
+See \\cref{thm:y} and \\cref{sec:x,thm:y} for details.
+\\end{document}
+`)
+    expect(tex2).toContain('\\cref{thm:y}')
+    expect(tex2).toContain('\\cref{sec:x,thm:y}')
+  })
 })

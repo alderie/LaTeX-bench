@@ -52,7 +52,7 @@
   /* Paper-specific tokens — the WYSIWYG surface. */
   --paper-bg: #fdfdfb;
   --paper-text: #1a1a1c;
-  --paper-measure: 72ch;
+  --paper-measure: 86ch;
   --paper-line-height: 1.55;
   --paper-body-size: 18px;
   --paper-margin-y: 96px;

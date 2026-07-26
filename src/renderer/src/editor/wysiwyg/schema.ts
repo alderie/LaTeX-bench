@@ -36,22 +36,45 @@ const nodes: { [name: string]: NodeSpec } = {
     defining: true,
     attrs: {
       id: { default: '' },
-      level: { default: 1 } // 1=section, 2=subsection, 3=subsubsection
+      level: { default: 1 }, // 1=section, 2=subsection, 3=subsubsection
+      starred: { default: false }, // \section* — no number
+      labels: { default: [] as string[] }
     },
     parseDOM: [
       {
         tag: 'section',
-        getAttrs: (dom) => ({
-          id: (dom as HTMLElement).id || '',
-          level: Number((dom as HTMLElement).dataset.level ?? '1')
-        })
+        getAttrs: (dom) => {
+          const el = dom as HTMLElement
+          const labels = el.dataset.labels
+          return {
+            id: el.id || '',
+            level: Number(el.dataset.level ?? '1'),
+            starred: el.dataset.starred === '1',
+            labels: labels ? labels.split(',').filter(Boolean) : []
+          }
+        }
       }
     ],
-    toDOM: (node) => [
-      'section',
-      { id: node.attrs.id as string, 'data-level': String(node.attrs.level) },
-      0
-    ]
+    toDOM: (node) => {
+      const labels = node.attrs.labels as string[]
+      // First label wins as the navigable anchor. Fall back to the
+      // slug-based id (set at parse time) so old behaviour is preserved
+      // for sections without labels.
+      const anchorId =
+        labels.length > 0
+          ? `latex-anchor-${labels[0].replace(/[^a-zA-Z0-9_-]/g, '-')}`
+          : (node.attrs.id as string)
+      return [
+        'section',
+        {
+          id: anchorId,
+          'data-level': String(node.attrs.level),
+          ...(node.attrs.starred ? { 'data-starred': '1' } : {}),
+          ...(labels.length > 0 ? { 'data-labels': labels.join(',') } : {})
+        },
+        0
+      ]
+    }
   },
 
   sectionTitle: {
@@ -137,17 +160,25 @@ const nodes: { [name: string]: NodeSpec } = {
         }
       }
     ],
-    toDOM: (node) => [
-      'figure',
-      {
-        'data-figure': '',
-        'data-src': node.attrs.src as string,
-        'data-caption': (node.attrs.caption as string) ?? '',
-        ...(node.attrs.label ? { 'data-label': node.attrs.label as string } : {}),
-        ...(node.attrs.width ? { 'data-width': node.attrs.width as string } : {})
-      },
-      ''
-    ]
+    toDOM: (node) => {
+      const label = node.attrs.label as string | null
+      return [
+        'figure',
+        {
+          'data-figure': '',
+          'data-src': node.attrs.src as string,
+          'data-caption': (node.attrs.caption as string) ?? '',
+          ...(label
+            ? {
+                'data-label': label,
+                id: `latex-anchor-${label.replace(/[^a-zA-Z0-9_-]/g, '-')}`
+              }
+            : {}),
+          ...(node.attrs.width ? { 'data-width': node.attrs.width as string } : {})
+        },
+        ''
+      ]
+    }
   },
 
   rawLatex: {
@@ -215,16 +246,24 @@ const nodes: { [name: string]: NodeSpec } = {
         }
       }
     ],
-    toDOM: (node) => [
-      'aside',
-      {
-        'data-theorem': '',
-        'data-kind': node.attrs.kind as string,
-        ...(node.attrs.label ? { 'data-label': node.attrs.label as string } : {}),
-        ...(node.attrs.title ? { 'data-title': node.attrs.title as string } : {})
-      },
-      0
-    ]
+    toDOM: (node) => {
+      const label = node.attrs.label as string | null
+      return [
+        'aside',
+        {
+          'data-theorem': '',
+          'data-kind': node.attrs.kind as string,
+          ...(label
+            ? {
+                'data-label': label,
+                id: `latex-anchor-${label.replace(/[^a-zA-Z0-9_-]/g, '-')}`
+              }
+            : {}),
+          ...(node.attrs.title ? { 'data-title': node.attrs.title as string } : {})
+        },
+        0
+      ]
+    }
   },
 
   // \begin{thebibliography}{99} ... \end{thebibliography} — a list of
@@ -271,18 +310,85 @@ const nodes: { [name: string]: NodeSpec } = {
         }
       }
     ],
+    toDOM: (node) => {
+      const key = node.attrs.key as string
+      return [
+        'div',
+        {
+          'data-bibitem': '',
+          'data-key': key,
+          ...(key
+            ? { id: `latex-anchor-${key.replace(/[^a-zA-Z0-9_-]/g, '-')}` }
+            : {}),
+          ...(node.attrs.label ? { 'data-label': node.attrs.label as string } : {})
+        },
+        0
+      ]
+    }
+  },
+
+  // ── Title block ────────────────────────────────────────────────
+  // Renders the document's title, author list, and date as an
+  // editable structure. \title/\author/\date are lifted out of the
+  // preamble at parse time and a `titleBlock` is inserted at the
+  // position of \maketitle. On serialize, the metadata is re-emitted
+  // into the preamble and a literal `\maketitle` written at the block
+  // position. \and inside \author starts a new authorEntry; `\\` is a
+  // hard line break (`hardBreak`).
+  titleBlock: {
+    group: 'block',
+    content: 'titleHeading authorList? titleDate?',
+    defining: true,
+    parseDOM: [{ tag: 'div[data-title-block]' }],
+    toDOM: () => ['div', { 'data-title-block': '' }, 0]
+  },
+  titleHeading: {
+    content: 'inline*',
+    defining: true,
+    parseDOM: [{ tag: 'h1[data-title-heading]' }],
+    toDOM: () => ['h1', { 'data-title-heading': '', class: 'title-block__title' }, 0]
+  },
+  authorList: {
+    content: 'authorEntry+',
+    parseDOM: [{ tag: 'div[data-author-list]' }],
+    toDOM: () => ['div', { 'data-author-list': '', class: 'title-block__authors' }, 0]
+  },
+  authorEntry: {
+    content: 'inline*',
+    parseDOM: [{ tag: 'div[data-author-entry]' }],
+    toDOM: () => ['div', { 'data-author-entry': '', class: 'title-block__author' }, 0]
+  },
+  titleDate: {
+    content: 'inline*',
+    attrs: { kind: { default: 'literal' } }, // 'today' | 'literal'
+    parseDOM: [
+      {
+        tag: 'div[data-title-date]',
+        getAttrs: (dom) => ({
+          kind: (dom as HTMLElement).dataset.kind || 'literal'
+        })
+      }
+    ],
     toDOM: (node) => [
       'div',
       {
-        'data-bibitem': '',
-        'data-key': node.attrs.key as string,
-        ...(node.attrs.label ? { 'data-label': node.attrs.label as string } : {})
+        'data-title-date': '',
+        'data-kind': node.attrs.kind as string,
+        class: 'title-block__date'
       },
       0
     ]
   },
 
   text: { group: 'inline' },
+
+  hardBreak: {
+    group: 'inline',
+    inline: true,
+    selectable: false,
+    parseDOM: [{ tag: 'br' }],
+    toDOM: () => ['br']
+  },
 
   mathInline: {
     group: 'inline',
@@ -326,14 +432,47 @@ const nodes: { [name: string]: NodeSpec } = {
     inline: true,
     atom: true,
     selectable: true,
-    attrs: { label: { default: '' } },
+    attrs: {
+      // Backwards-compat: single-label refs still populate `label`.
+      label: { default: '' },
+      // The full key list (cleveref `\cref{a,b,c}` form). When non-empty,
+      // takes precedence over `label`.
+      keys: { default: [] as string[] },
+      // Which command this came from — controls the formatted output:
+      //   ref     → "3.1"
+      //   eqref   → "(1)"
+      //   cref    → "Theorem 3.1"
+      //   Cref    → "Theorem 3.1" (capitalised at start)
+      //   pageref → page number (we render as "?"/key for now)
+      //   autoref → kind + number, similar to cref
+      cmd: { default: 'ref' }
+    },
     parseDOM: [
       {
         tag: 'span[data-cross-ref]',
-        getAttrs: (dom) => ({ label: (dom as HTMLElement).dataset.label ?? '' })
+        getAttrs: (dom) => {
+          const el = dom as HTMLElement
+          const keys = el.dataset.keys
+          return {
+            label: el.dataset.label ?? '',
+            keys: keys ? keys.split(',').filter(Boolean) : [],
+            cmd: el.dataset.cmd ?? 'ref'
+          }
+        }
       }
     ],
-    toDOM: (node) => ['span', { 'data-cross-ref': '', 'data-label': node.attrs.label as string }, '']
+    toDOM: (node) => [
+      'span',
+      {
+        'data-cross-ref': '',
+        'data-label': node.attrs.label as string,
+        'data-cmd': node.attrs.cmd as string,
+        ...((node.attrs.keys as string[]).length > 0
+          ? { 'data-keys': (node.attrs.keys as string[]).join(',') }
+          : {})
+      },
+      ''
+    ]
   }
 }
 

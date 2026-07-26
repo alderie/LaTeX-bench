@@ -9,14 +9,23 @@ const SECTION_MACRO_BY_LEVEL: Record<number, string> = {
 export function serializeDocToLatex(doc: PMNode): string {
   const parts: string[] = []
   let preamble = ''
+  let titleBlockNode: PMNode | null = null
 
   doc.forEach((child) => {
     if (child.type.name === 'preamble') {
       preamble = (child.attrs.source as string).trim()
+    } else if (child.type.name === 'titleBlock' && titleBlockNode === null) {
+      // Capture the FIRST titleBlock — there should only be one. The
+      // metadata round-trips through the preamble, not through the body.
+      titleBlockNode = child
     }
   })
 
   if (preamble) parts.push(preamble)
+  if (titleBlockNode) {
+    const meta = serializeTitleMetadata(titleBlockNode)
+    if (meta) parts.push(`\n${meta}`)
+  }
   parts.push('\n\\begin{document}\n')
 
   doc.forEach((child) => {
@@ -28,18 +37,57 @@ export function serializeDocToLatex(doc: PMNode): string {
   return parts.join('')
 }
 
+// Re-emit the title metadata into the preamble. Returns "" if the block
+// is empty.
+function serializeTitleMetadata(node: PMNode): string {
+  // Pull each field out of the block's children. Use `as` casts on the
+  // accumulator types because closure-mutated locals can't keep their
+  // narrowed types across the `forEach` boundary.
+  let titleSrc = ''
+  const authorEntries: string[] = []
+  let dateSrc = '' as string
+  let dateKind = 'literal' as string
+
+  node.forEach((child) => {
+    switch (child.type.name) {
+      case 'titleHeading':
+        titleSrc = serializeInline(child)
+        break
+      case 'authorList':
+        child.forEach((entry) => {
+          authorEntries.push(serializeInline(entry))
+        })
+        break
+      case 'titleDate':
+        dateKind = ((child.attrs.kind as string) || 'literal') as string
+        dateSrc = serializeInline(child)
+        break
+    }
+  })
+
+  const lines: string[] = []
+  if (titleSrc) lines.push(`\\title{${titleSrc.trim()}}`)
+  if (authorEntries.length > 0) {
+    const trimmed = authorEntries.map((s) => s.trim()).filter(Boolean)
+    if (trimmed.length > 0) lines.push(`\\author{${trimmed.join(' \\and ')}}`)
+  }
+  if (dateKind === 'today') lines.push('\\date{\\today}')
+  else if (dateSrc.trim() !== '') lines.push(`\\date{${dateSrc.trim()}}`)
+  return lines.join('\n')
+}
+
 function serializeBlock(node: PMNode): string {
   switch (node.type.name) {
     case 'section': {
       const macro = SECTION_MACRO_BY_LEVEL[node.attrs.level as number] ?? 'section'
+      const star = (node.attrs.starred as boolean) ? '*' : ''
+      const labels = (node.attrs.labels as string[]) ?? []
       let out = ''
-      // First child is sectionTitle; rest are body blocks.
       const title = node.firstChild
-      if (title && title.type.name === 'sectionTitle') {
-        out += `\n\\${macro}{${serializeInline(title)}}\n`
-      } else {
-        out += `\n\\${macro}{}\n`
-      }
+      const inline = title && title.type.name === 'sectionTitle' ? serializeInline(title) : ''
+      out += `\n\\${macro}${star}{${inline}}`
+      for (const lbl of labels) out += `\\label{${lbl}}`
+      out += '\n'
       node.forEach((child, _, i) => {
         if (i === 0) return
         out += serializeBlock(child)
@@ -62,6 +110,11 @@ function serializeBlock(node: PMNode): string {
       return serializeTheorem(node)
     case 'bibliography':
       return serializeBibliography(node)
+    case 'titleBlock':
+      // The metadata is round-tripped through the preamble already (via
+      // serializeTitleMetadata); the block itself becomes a bare
+      // `\maketitle` at its position in the body.
+      return '\n\\maketitle\n'
     default:
       // Defensive: an unrecognized node type would otherwise be silently
       // serialized as empty, which deletes the user's content the next
@@ -147,8 +200,15 @@ function serializeInlineChild(node: PMNode): string {
       const keys = (node.attrs.keys as string[]) ?? []
       return `\\cite{${keys.join(',')}}`
     }
-    case 'crossRef':
-      return `\\ref{${node.attrs.label as string}}`
+    case 'crossRef': {
+      const cmd = (node.attrs.cmd as string) || 'ref'
+      const keys = (node.attrs.keys as string[]) ?? []
+      const fallback = (node.attrs.label as string) || ''
+      const list = keys.length > 0 ? keys.join(',') : fallback
+      return `\\${cmd}{${list}}`
+    }
+    case 'hardBreak':
+      return '\\\\'
     default:
       return ''
   }

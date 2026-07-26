@@ -1,13 +1,17 @@
 import type { Node as PMNode } from 'prosemirror-model'
 import type { NodeView, NodeViewConstructor } from 'prosemirror-view'
+import { getCitation, subscribe } from '../labelRegistry'
 
 class CitationView implements NodeView {
   dom: HTMLElement
+  private unsubscribe: () => void
+
   constructor(private node: PMNode) {
-    this.dom = document.createElement('span')
-    this.dom.className = 'citation-chip'
+    this.dom = document.createElement('a')
+    this.dom.className = 'citation'
     this.dom.contentEditable = 'false'
     this.render()
+    this.unsubscribe = subscribe(() => this.render())
   }
 
   update(node: PMNode): boolean {
@@ -19,12 +23,74 @@ class CitationView implements NodeView {
 
   private render(): void {
     const keys = (this.node.attrs.keys as string[]) ?? []
-    this.dom.textContent = keys.length === 0 ? '[?]' : `[${keys.join(', ')}]`
+    const resolved = keys.map((k) => ({ key: k, ref: getCitation(k) }))
+
+    if (keys.length === 0) {
+      this.dom.classList.add('citation--unresolved')
+      this.dom.removeAttribute('href')
+      this.dom.textContent = '[?]'
+      return
+    }
+
+    const allResolved = resolved.every((r) => r.ref !== undefined)
+    this.dom.classList.toggle('citation--unresolved', !allResolved)
+
+    // Anchor the link at the first resolvable key.
+    const firstAnchor = resolved.find((r) => r.ref !== undefined)?.ref?.domAnchor
+    if (firstAnchor) {
+      ;(this.dom as HTMLAnchorElement).href = `#${firstAnchor}`
+    } else {
+      this.dom.removeAttribute('href')
+    }
+
+    // Tooltip lists the underlying keys for debugging.
+    this.dom.title = keys.join(', ')
+
+    if (!allResolved) {
+      this.dom.textContent = `[${keys.join(', ')}]`
+      return
+    }
+
+    // Numeric style (natbib's [numbers,sort&compress]): collapse a sorted
+    // run of consecutive numbers into a range.
+    const numbers = resolved
+      .map((r) => r.ref!.number)
+      .slice()
+      .sort((a, b) => a - b)
+    this.dom.textContent = `[${formatNumberList(numbers)}]`
   }
 
   ignoreMutation(): boolean {
     return true
   }
+
+  destroy(): void {
+    this.unsubscribe()
+  }
+}
+
+// "1, 2, 3, 5, 7, 8" → "1–3, 5, 7–8". Mirrors natbib's `sort&compress`.
+function formatNumberList(nums: number[]): string {
+  if (nums.length === 0) return ''
+  const groups: Array<[number, number]> = []
+  let start = nums[0]
+  let prev = nums[0]
+  for (let i = 1; i < nums.length; i++) {
+    const n = nums[i]
+    if (n === prev + 1) {
+      prev = n
+    } else if (n === prev) {
+      // duplicate — skip
+    } else {
+      groups.push([start, prev])
+      start = n
+      prev = n
+    }
+  }
+  groups.push([start, prev])
+  return groups
+    .map(([a, b]) => (a === b ? `${a}` : a + 1 === b ? `${a}, ${b}` : `${a}–${b}`))
+    .join(', ')
 }
 
 export const citationNodeView: NodeViewConstructor = (node) => new CitationView(node)

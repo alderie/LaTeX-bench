@@ -15,7 +15,9 @@ import { citationNodeView } from './nodeviews/CitationNodeView'
 import { crossRefNodeView } from './nodeviews/CrossRefNodeView'
 import { rawLatexNodeView } from './nodeviews/RawLatexNodeView'
 import { preambleNodeView } from './nodeviews/PreambleNodeView'
+import { theoremNodeView } from './nodeviews/TheoremNodeView'
 import { mathInlineInputRule, mathBlockInputRule } from './inputRules'
+import * as labelRegistry from './labelRegistry'
 import { usePaperStore } from '../../stores/paperStore'
 
 export function WysiwygEditor(): React.JSX.Element {
@@ -72,12 +74,16 @@ export function WysiwygEditor(): React.JSX.Element {
           citation: citationNodeView,
           crossRef: crossRefNodeView,
           rawLatex: rawLatexNodeView,
-          preamble: preambleNodeView
+          preamble: preambleNodeView,
+          theoremEnv: theoremNodeView
         },
         dispatchTransaction(tx) {
           const newState = view.state.apply(tx)
           view.updateState(newState)
           if (tx.docChanged) {
+            // Renumber labels/equations from the new doc state. Done
+            // BEFORE serialize so any error in serialize doesn't skip it.
+            labelRegistry.rebuild(newState.doc)
             try {
               const serialized = serializeDocToLatex(newState.doc)
               const cur = usePaperStore.getState()
@@ -90,6 +96,9 @@ export function WysiwygEditor(): React.JSX.Element {
           }
         }
       })
+      // Initial population — this is what populates labels for the
+      // freshly-loaded doc before any user edits.
+      labelRegistry.rebuild(state.doc)
       viewRef.current = view
     })()
 

@@ -3,7 +3,7 @@ import { parseLatexToDoc } from '@renderer/editor/wysiwyg/latex-to-doc'
 import { fixture, allOfType, firstOfType, flatText, nodeOutline } from './helpers'
 
 describe('parser — block-level macros', () => {
-  it('renders \\maketitle, \\tableofcontents as standalone rawLatex blocks', async () => {
+  it('promotes \\maketitle to a titleBlock and keeps \\tableofcontents as rawLatex', async () => {
     const { doc } = await parseLatexToDoc(`
 \\documentclass{article}
 \\title{X}
@@ -16,7 +16,9 @@ Body.
 `)
     const raws = allOfType(doc, 'rawLatex')
     const sources = raws.map((r) => (r.attrs.source as string).trim())
-    expect(sources).toContain('\\maketitle')
+    // \maketitle now lifts the title metadata out of the preamble into
+    // an editable titleBlock node — it is no longer a rawLatex block.
+    expect(allOfType(doc, 'titleBlock')).toHaveLength(1)
     expect(sources).toContain('\\tableofcontents')
     // Should NOT have leaked as paragraph text.
     expect(flatText(doc)).not.toContain('\\maketitle')

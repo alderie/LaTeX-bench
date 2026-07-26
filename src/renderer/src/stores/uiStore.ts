@@ -8,21 +8,15 @@ interface UiState {
   theme: Theme
   viewMode: ViewMode
   sidebarOpen: boolean
-  previewOpen: boolean
-  previewFullscreen: boolean
   paletteOpen: boolean
   findBarOpen: boolean
   symbolPaletteOpen: boolean
-  lockPreviewToCursor: boolean
   setTheme: (theme: Theme) => void
   setViewMode: (mode: ViewMode) => void
   toggleSidebar: () => void
-  togglePreview: () => void
-  togglePreviewFullscreen: () => void
   setPaletteOpen: (open: boolean) => void
   setFindBarOpen: (open: boolean) => void
   setSymbolPaletteOpen: (open: boolean) => void
-  setLockPreviewToCursor: (lock: boolean) => void
 }
 
 function resolveTheme(theme: Theme): 'light' | 'dark' {
@@ -41,12 +35,9 @@ export const useUiStore = create<UiState>()(
     // Bumped key so prior-session 'true' values don't override the new
     // closed-by-default behavior.
     sidebarOpen: localStorage.getItem('sidebarOpen.v2') === 'true',
-    previewOpen: localStorage.getItem('previewOpen.v2') === 'true',
-    previewFullscreen: false,
     paletteOpen: false,
     findBarOpen: false,
     symbolPaletteOpen: false,
-    lockPreviewToCursor: true,
 
     setTheme: (theme) =>
       set((s) => {
@@ -63,17 +54,6 @@ export const useUiStore = create<UiState>()(
         s.sidebarOpen = !s.sidebarOpen
         localStorage.setItem('sidebarOpen.v2', String(s.sidebarOpen))
       }),
-    togglePreview: () =>
-      set((s) => {
-        s.previewOpen = !s.previewOpen
-        if (!s.previewOpen) s.previewFullscreen = false
-        localStorage.setItem('previewOpen.v2', String(s.previewOpen))
-      }),
-    togglePreviewFullscreen: () =>
-      set((s) => {
-        s.previewFullscreen = !s.previewFullscreen
-        if (s.previewFullscreen) s.previewOpen = true
-      }),
     setPaletteOpen: (open) =>
       set((s) => {
         s.paletteOpen = open
@@ -85,10 +65,6 @@ export const useUiStore = create<UiState>()(
     setSymbolPaletteOpen: (open) =>
       set((s) => {
         s.symbolPaletteOpen = open
-      }),
-    setLockPreviewToCursor: (lock) =>
-      set((s) => {
-        s.lockPreviewToCursor = lock
       })
   }))
 )

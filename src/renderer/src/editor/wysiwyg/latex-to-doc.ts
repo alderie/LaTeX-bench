@@ -346,11 +346,19 @@ export async function parseLatexToDoc(tex: string): Promise<ParseResult> {
   const bodyNodes: AstNodeArr =
     docStart >= 0 ? (root[docStart] as any).content : root // fall back to entire input
 
-  const preambleText = printRaw(preambleNodes).trim()
   const documentClass = extractDocumentClass(preambleNodes)
   const mathMacros = extractMathMacros(preambleNodes, printRaw)
 
-  const blocks = nodesToBlocks(bodyNodes, printRaw)
+  // Only extract \title/\author/\date when the body actually has
+  // \maketitle to anchor them. Otherwise the metadata stays inside the
+  // preamble source string, untouched, and round-trips byte-for-byte.
+  const hasMaketitle = bodyHasMaketitle(bodyNodes)
+  const { titleMetadata, cleanedPreambleNodes } = hasMaketitle
+    ? extractTitleMetadata(preambleNodes, printRaw)
+    : { titleMetadata: undefined, cleanedPreambleNodes: preambleNodes }
+  const preambleText = printRaw(cleanedPreambleNodes).trim()
+
+  const blocks = nodesToBlocks(bodyNodes, printRaw, titleMetadata)
 
   // Build the PM doc. Top-level always starts with a hidden preamble node so
   // the round-trip can reattach it on serialize.
@@ -369,6 +377,85 @@ export async function parseLatexToDoc(tex: string): Promise<ParseResult> {
     documentClass,
     mathMacros
   }
+}
+
+function bodyHasMaketitle(body: AstNodeArr): boolean {
+  for (const n of body) {
+    if (n.type === 'macro' && n.content === 'maketitle') return true
+  }
+  return false
+}
+
+// ── Title metadata extraction ──────────────────────────────────────────
+
+interface TitleMetadata {
+  titleNodes: AstNodeArr
+  authorEntries: AstNodeArr[] // split on \and
+  dateNodes: AstNodeArr | null
+  dateKind: 'today' | 'literal'
+  hasAny: boolean
+}
+
+function extractTitleMetadata(
+  preamble: AstNodeArr,
+  printRaw: (n: AstNodeArr) => string
+): { titleMetadata: TitleMetadata; cleanedPreambleNodes: AstNodeArr } {
+  const meta: TitleMetadata = {
+    titleNodes: [],
+    authorEntries: [],
+    dateNodes: null,
+    dateKind: 'literal',
+    hasAny: false
+  }
+  const cleaned: AstNodeArr = []
+  for (const n of preamble) {
+    if (n.type === 'macro' && n.content === 'title') {
+      const arg = (n.args ?? []).find((a: any) => a.openMark === '{')
+      meta.titleNodes = arg?.content ?? []
+      meta.hasAny = true
+      continue
+    }
+    if (n.type === 'macro' && n.content === 'author') {
+      const arg = (n.args ?? []).find((a: any) => a.openMark === '{')
+      const content: AstNodeArr = arg?.content ?? []
+      meta.authorEntries = splitOnAnd(content)
+      meta.hasAny = true
+      continue
+    }
+    if (n.type === 'macro' && n.content === 'date') {
+      const arg = (n.args ?? []).find((a: any) => a.openMark === '{')
+      const content: AstNodeArr = arg?.content ?? []
+      // Detect `\today` so we can re-emit it on serialize without baking
+      // a frozen date into the source.
+      const onlyToday =
+        content.length === 1 &&
+        content[0].type === 'macro' &&
+        content[0].content === 'today'
+      meta.dateNodes = content
+      meta.dateKind = onlyToday ? 'today' : 'literal'
+      meta.hasAny = true
+      // Suppress today's literal text — date is rendered live in the view.
+      void printRaw
+      continue
+    }
+    cleaned.push(n)
+  }
+  return { titleMetadata: meta, cleanedPreambleNodes: cleaned }
+}
+
+function splitOnAnd(content: AstNodeArr): AstNodeArr[] {
+  const groups: AstNodeArr[] = []
+  let current: AstNodeArr = []
+  for (const n of content) {
+    if (n.type === 'macro' && n.content === 'and') {
+      groups.push(current)
+      current = []
+      continue
+    }
+    current.push(n)
+  }
+  groups.push(current)
+  return groups
 }
 
 // Walk preamble nodes and pick out macro definitions usable by KaTeX.
@@ -512,13 +599,23 @@ function printRawSafe(nodes: AstNodeArr): string {
 
 // ── Block-level conversion ──────────────────────────────────────────────
 
-function nodesToBlocks(nodes: AstNodeArr, printRaw: (n: AstNodeArr) => string): PMNode[] {
+function nodesToBlocks(
+  nodes: AstNodeArr,
+  printRaw: (n: AstNodeArr) => string,
+  titleMetadata?: TitleMetadata
+): PMNode[] {
   const blocks: PMNode[] = []
   // We process the body as a sequence: a "section" macro starts a section,
   // and subsequent paragraph/math/figure blocks attach inside it until the
   // next section macro (of equal-or-shallower level) appears.
 
-  type SectionFrame = { level: number; titleInline: PMNode[]; children: PMNode[] }
+  type SectionFrame = {
+    level: number
+    titleInline: PMNode[]
+    children: PMNode[]
+    starred: boolean
+    labels: string[]
+  }
   const stack: SectionFrame[] = []
 
   const flushSection = (): void => {
@@ -631,9 +728,60 @@ function nodesToBlocks(nodes: AstNodeArr, printRaw: (n: AstNodeArr) => string): 
         if (stack.length > 0) stack[stack.length - 1].children.push(sectionNode)
         else blocks.push(sectionNode)
       }
+      // Detect starred form `\section*{Title}` — unified-latex captures
+      // the `*` as either a separate `string` sibling or a no-mark
+      // argument with content `[{type:'string', content:'*'}]`.
+      let starred = false
+      const starInArgs = (n.args ?? []).some(
+        (a: any) =>
+          a.openMark === '' &&
+          (a.content ?? []).some(
+            (c: any) => c.type === 'string' && c.content === '*'
+          )
+      )
+      if (starInArgs) starred = true
+      else {
+        for (let j = i + 1; j < nodes.length; j++) {
+          const t = nodes[j]
+          if (t.type === 'whitespace' || t.type === 'comment') continue
+          if (t.type === 'string' && t.content === '*') {
+            starred = true
+            i = j // consume the star token
+          }
+          break
+        }
+      }
       const titleArg = (n.args ?? []).find((a: any) => a.openMark === '{')
-      const titleInline = inlineNodes(titleArg?.content ?? [], printRaw)
-      stack.push({ level, titleInline, children: [] })
+      const titleContent: AstNodeArr = titleArg?.content ?? []
+      // Pull any `\label{key}` out of the title — they're invisible at
+      // render time but feed the cross-ref registry.
+      const titleLabels = collectLabels(titleContent)
+      const titleInline = inlineNodes(titleContent, printRaw)
+      // Look-ahead for `\label{key}` siblings immediately after the
+      // section macro (the more common LaTeX style).
+      const trailingLabels: string[] = []
+      while (i + 1 < nodes.length) {
+        const t = nodes[i + 1]
+        if (t.type === 'whitespace' || t.type === 'comment') {
+          i++
+          continue
+        }
+        if (t.type === 'macro' && t.content === 'label') {
+          const arg = (t.args ?? []).find((a: any) => a.openMark === '{')
+          const key = printRaw(arg?.content ?? []).trim()
+          if (key) trailingLabels.push(key)
+          i++
+          continue
+        }
+        break
+      }
+      stack.push({
+        level,
+        titleInline,
+        children: [],
+        starred,
+        labels: [...titleLabels, ...trailingLabels]
+      })
       continue
     }
 
@@ -645,6 +793,17 @@ function nodesToBlocks(nodes: AstNodeArr, printRaw: (n: AstNodeArr) => string): 
     // groups in the AST, and we need all four in the rawLatex source.
     if (n.type === 'macro' && BLOCK_MACROS.has(n.content)) {
       flushParagraph()
+      // \maketitle becomes a structured, editable titleBlock when we
+      // have metadata extracted from the preamble. Without metadata
+      // (e.g. metadata-less \maketitle in a partial doc) fall back to
+      // the rawLatex placeholder.
+      if (n.content === 'maketitle' && titleMetadata && titleMetadata.hasAny) {
+        const tb = buildTitleBlock(titleMetadata, printRaw)
+        if (tb) {
+          pushBlock(tb)
+          continue
+        }
+      }
       const { source, next } = consumeMacroBody(i)
       pushBlock(latexSchema.nodes.rawLatex.create({ source }))
       i = next - 1 // -1 because the for-loop increments
@@ -775,6 +934,25 @@ function nodesToBlocks(nodes: AstNodeArr, printRaw: (n: AstNodeArr) => string): 
     }
 
     // Inline-ish content collects into the current paragraph buffer.
+    // For arg-consuming inline macros (\citep, \cref, …) whose `{…}` arg
+    // unified-latex couldn't capture as a real `args` slot, we have to
+    // hand the *macro AND its trailing group* to `inlineNodes` together
+    // — the lookahead in `inlineNodes` can only see what's in the array
+    // we pass it, and the default fallback passes one node at a time.
+    if (n.type === 'macro' && ARG_CONSUMING_INLINE_MACROS.has(n.content)) {
+      const chunk: AstNodeArr = [n]
+      for (let j = i + 1; j < nodes.length; j++) {
+        const t = nodes[j]
+        if (t.type === 'whitespace' || t.type === 'comment') continue
+        if (t.type === 'group') {
+          chunk.push(t)
+          i = j // consume the group from the outer loop
+        }
+        break
+      }
+      bufferInline.push(...inlineNodes(chunk, printRaw))
+      continue
+    }
     bufferInline.push(...inlineNodes([n], printRaw))
   }
 
@@ -784,11 +962,80 @@ function nodesToBlocks(nodes: AstNodeArr, printRaw: (n: AstNodeArr) => string): 
   return blocks
 }
 
-function buildSection(frame: { level: number; titleInline: PMNode[]; children: PMNode[] }): PMNode {
+function buildSection(frame: {
+  level: number
+  titleInline: PMNode[]
+  children: PMNode[]
+  starred: boolean
+  labels: string[]
+}): PMNode {
   const id = slugFromInline(frame.titleInline)
   const title = latexSchema.nodes.sectionTitle.create({ level: frame.level }, frame.titleInline)
   const body = frame.children.length > 0 ? frame.children : [latexSchema.nodes.paragraph.create()]
-  return latexSchema.nodes.section.create({ id, level: frame.level }, [title, ...body])
+  return latexSchema.nodes.section.create(
+    { id, level: frame.level, starred: frame.starred, labels: frame.labels },
+    [title, ...body]
+  )
+}
+
+function buildTitleBlock(
+  meta: TitleMetadata,
+  printRaw: (n: AstNodeArr) => string
+): PMNode | null {
+  if (!meta.hasAny) return null
+  const titleInline = inlineNodes(meta.titleNodes, printRaw)
+  const titleHeading = latexSchema.nodes.titleHeading.create({}, titleInline)
+  const children: PMNode[] = [titleHeading]
+
+  if (meta.authorEntries.length > 0) {
+    const entries: PMNode[] = []
+    for (const entryNodes of meta.authorEntries) {
+      const inline = inlineNodes(entryNodes, printRaw)
+      // Collapse leading/trailing breaks so author blocks read cleanly.
+      const trimmed = trimInlineWithBreaks(inline)
+      entries.push(latexSchema.nodes.authorEntry.create({}, trimmed))
+    }
+    if (entries.length > 0) {
+      children.push(latexSchema.nodes.authorList.create({}, entries))
+    }
+  }
+
+  if (meta.dateNodes !== null) {
+    const inline = meta.dateKind === 'today' ? [] : inlineNodes(meta.dateNodes, printRaw)
+    children.push(latexSchema.nodes.titleDate.create({ kind: meta.dateKind }, inline))
+  }
+
+  return latexSchema.nodes.titleBlock.create({}, children)
+}
+
+// Like trimInline but treats hardBreak nodes as collapsible whitespace
+// at the edges of an author entry (so `Name\\Affiliation\\` doesn't emit
+// a trailing blank line).
+function trimInlineWithBreaks(nodes: PMNode[]): PMNode[] {
+  const out = [...nodes]
+  const isBlank = (n: PMNode): boolean =>
+    n.type.name === 'hardBreak' || (n.isText && (n.text ?? '').trim() === '')
+  while (out.length > 0 && isBlank(out[0])) out.shift()
+  while (out.length > 0 && isBlank(out[out.length - 1])) out.pop()
+  return out
+}
+
+// Walk a flat AST node list and collect every `\label{key}` argument's
+// stripped text. Used by the section parser to pick up labels declared
+// inside the title brace, e.g. `\section{Title \label{sec:foo}}`.
+function collectLabels(nodes: AstNodeArr): string[] {
+  const out: string[] = []
+  for (const n of nodes) {
+    if (n.type === 'macro' && n.content === 'label') {
+      const arg = (n.args ?? []).find((a: any) => a.openMark === '{')
+      const text = (arg?.content ?? [])
+        .map((c: any) => c.content ?? c.value ?? '')
+        .join('')
+        .trim()
+      if (text) out.push(text)
+    }
+  }
+  return out
 }
 
 function slugFromInline(inline: PMNode[]): string {
@@ -1004,7 +1251,8 @@ function inlineNodes(nodes: AstNodeArr, printRaw: (n: AstNodeArr) => string): PM
     textBuf = ''
   }
 
-  for (const n of nodes) {
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i]
     if (n.type === 'string') {
       // Common LaTeX text shortcuts: ~ is a non-breaking space, --- is an
       // em-dash, -- is an en-dash. Map them to their visible characters so
@@ -1024,7 +1272,15 @@ function inlineNodes(nodes: AstNodeArr, printRaw: (n: AstNodeArr) => string): PM
       out.push(latexSchema.nodes.mathInline.create({ latex }))
     } else if (n.type === 'macro') {
       flushText()
-      const node = macroToInline(n, printRaw)
+      // Some inline macros (\cite, \citep, \ref, \cref, \href, …) need a
+      // following `{...}` argument. unified-latex doesn't know every
+      // package's macro signatures by default — when an arg-expecting
+      // macro has no captured `{`-arg and is immediately followed by a
+      // `group` sibling, fold that group in as the macro's argument
+      // before dispatching to macroToInline.
+      const consumed = absorbTrailingArg(nodes, i, n)
+      if (consumed.consumed > 0) i += consumed.consumed
+      const node = macroToInline(consumed.macro, printRaw)
       if (Array.isArray(node)) out.push(...node)
       else if (node) out.push(node)
     } else if (n.type === 'group') {
@@ -1040,6 +1296,48 @@ function inlineNodes(nodes: AstNodeArr, printRaw: (n: AstNodeArr) => string): PM
 
   flushText()
   return out
+}
+
+// Macros whose semantics require a brace argument that unified-latex
+// often doesn't capture (because the package declaring them isn't in
+// its built-in signature table). When we see one of these and it has
+// no `{`-arg, look ahead for a group sibling and attach it.
+const ARG_CONSUMING_INLINE_MACROS = new Set([
+  'cite',
+  'citep',
+  'citet',
+  'citeauthor',
+  'citeyear',
+  'parencite',
+  'textcite',
+  'cref',
+  'Cref',
+  'autoref',
+  'nameref',
+  'pageref'
+])
+
+function absorbTrailingArg(
+  nodes: AstNodeArr,
+  index: number,
+  macro: any
+): { macro: any; consumed: number } {
+  const name = macro.content as string
+  if (!ARG_CONSUMING_INLINE_MACROS.has(name)) return { macro, consumed: 0 }
+  const args = (macro.args ?? []) as Array<any>
+  if (args.some((a) => a.openMark === '{')) return { macro, consumed: 0 }
+  // Peek ahead for a group sibling, skipping whitespace/comments.
+  for (let j = index + 1; j < nodes.length; j++) {
+    const t = nodes[j]
+    if (t.type === 'whitespace' || t.type === 'comment') continue
+    if (t.type === 'group') {
+      const synthArg = { openMark: '{', closeMark: '}', content: t.content ?? [] }
+      const merged = { ...macro, args: [...args, synthArg] }
+      return { macro: merged, consumed: j - index }
+    }
+    break
+  }
+  return { macro, consumed: 0 }
 }
 
 function macroToInline(
@@ -1066,8 +1364,17 @@ function macroToInline(
     name === 'nameref'
   ) {
     const arg = (macro.args ?? []).find((a: any) => a.openMark === '{')
-    const label = printRaw(arg?.content ?? []).trim()
-    return latexSchema.nodes.crossRef.create({ label })
+    const raw = printRaw(arg?.content ?? []).trim()
+    // \cref/\Cref accept comma-separated key lists.
+    const keys = raw
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+    return latexSchema.nodes.crossRef.create({
+      label: keys[0] ?? '',
+      keys,
+      cmd: name
+    })
   }
   if (name === 'textbf' || name === 'textit' || name === 'emph' || name === 'texttt' || name === 'textsc') {
     const arg = (macro.args ?? []).find((a: any) => a.openMark === '{')
@@ -1117,8 +1424,7 @@ function macroToInline(
     return null
   }
   if (name === '\\' || name === 'newline') {
-    // Hard line breaks → space (we don't model hard breaks in this schema).
-    return latexSchema.text(' ')
+    return latexSchema.nodes.hardBreak.create()
   }
 
   // Silent layout macros — emit nothing.

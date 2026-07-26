@@ -139,10 +139,11 @@ describe('parser — heavy-tail paper (broad LaTeX surface)', () => {
     expect(m['\\label']).toBe('')
   })
 
-  it('treats \\maketitle, \\appendix as standalone block macros', async () => {
+  it('treats \\maketitle as a titleBlock and \\appendix as a rawLatex block', async () => {
     const { doc } = await parseLatexToDoc(fixture('heavy-tail-paper.tex'))
     const raws = allOfType(doc, 'rawLatex').map((n) => (n.attrs.source as string).trim())
-    expect(raws).toContain('\\maketitle')
+    // \maketitle becomes a structured titleBlock built from preamble metadata.
+    expect(allOfType(doc, 'titleBlock')).toHaveLength(1)
     expect(raws.some((s) => s === '\\appendix' || s.startsWith('\\appendix'))).toBe(true)
   })
 

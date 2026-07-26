@@ -1,15 +1,18 @@
 import type { Node as PMNode } from 'prosemirror-model'
 import type { NodeView, NodeViewConstructor } from 'prosemirror-view'
 import { useLibraryStore } from '../../../stores/libraryStore'
+import { getLabel, subscribe } from '../labelRegistry'
 
 class FigureView implements NodeView {
   dom: HTMLElement
+  private unsubscribe: () => void
 
   constructor(private node: PMNode) {
     this.dom = document.createElement('figure')
     this.dom.className = 'figure-block'
     this.dom.contentEditable = 'false'
     this.render()
+    this.unsubscribe = subscribe(() => this.render())
   }
 
   update(node: PMNode): boolean {
@@ -22,7 +25,14 @@ class FigureView implements NodeView {
   private render(): void {
     const src = (this.node.attrs.src as string).trim()
     const caption = (this.node.attrs.caption as string).trim()
+    const label = (this.node.attrs.label as string | null) || null
     this.dom.replaceChildren()
+
+    if (label) {
+      this.dom.id = `latex-anchor-${label.replace(/[^a-zA-Z0-9_-]/g, '-')}`
+    } else {
+      this.dom.removeAttribute('id')
+    }
 
     const img = document.createElement('img')
     img.alt = caption || 'figure'
@@ -35,10 +45,19 @@ class FigureView implements NodeView {
     }
     this.dom.appendChild(img)
 
-    if (caption) {
+    if (caption || label) {
       const cap = document.createElement('figcaption')
       cap.className = 'figure-block__caption'
-      cap.textContent = caption
+      const resolved = label ? getLabel(label) : undefined
+      const number = resolved?.number ?? ''
+      const tag = document.createElement('span')
+      tag.className = 'figure-block__tag'
+      tag.textContent = number ? `Figure ${number}` : 'Figure'
+      cap.appendChild(tag)
+      if (caption) {
+        cap.appendChild(document.createTextNode(' · '))
+        cap.appendChild(document.createTextNode(caption))
+      }
       this.dom.appendChild(cap)
     }
   }
@@ -52,7 +71,7 @@ class FigureView implements NodeView {
   }
 
   destroy(): void {
-    /* no-op */
+    this.unsubscribe()
   }
 }
 

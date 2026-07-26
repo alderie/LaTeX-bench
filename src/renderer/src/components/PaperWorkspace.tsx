@@ -2,7 +2,6 @@ import * as React from 'react'
 import { Suspense, lazy } from 'react'
 import { SidePanel } from './SidePanel'
 import { EditorPane } from './EditorPane'
-import { PreviewPane } from './PreviewPane'
 import { MainHeader } from './MainHeader'
 import { FindBar } from './FindBar'
 import { McpIndicator } from './McpIndicator'
@@ -17,23 +16,16 @@ const SymbolPalette = lazy(() =>
 )
 
 export function PaperWorkspace(): React.JSX.Element {
-  const previewOpen = useUiStore((s) => s.previewOpen)
-  const previewFullscreen = useUiStore((s) => s.previewFullscreen)
   const paletteOpen = useUiStore((s) => s.paletteOpen)
   const symbolPaletteOpen = useUiStore((s) => s.symbolPaletteOpen)
 
-  let appCls = 'app'
-  if (previewOpen) appCls += ' app--preview-open'
-  if (previewFullscreen) appCls += ' app--preview-fullscreen'
-
   return (
-    <div className={appCls}>
+    <div className="app">
       <SidePanel />
       <div className="main-content-wrapper">
         <MainHeader />
         <EditorPane />
       </div>
-      {previewOpen && <PreviewPane />}
       <FindBar />
       <McpIndicator />
       {paletteOpen && (

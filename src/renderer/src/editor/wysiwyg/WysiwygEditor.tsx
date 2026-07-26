@@ -16,6 +16,9 @@ import { crossRefNodeView } from './nodeviews/CrossRefNodeView'
 import { rawLatexNodeView } from './nodeviews/RawLatexNodeView'
 import { preambleNodeView } from './nodeviews/PreambleNodeView'
 import { theoremNodeView } from './nodeviews/TheoremNodeView'
+import { codeBlockNodeView } from './nodeviews/CodeBlockNodeView'
+import { captionNodeView } from './nodeviews/CaptionNodeView'
+import { footnoteNodeView } from './nodeviews/FootnoteNodeView'
 import { mathInlineInputRule, mathBlockInputRule } from './inputRules'
 import * as labelRegistry from './labelRegistry'
 import { usePaperStore } from '../../stores/paperStore'
@@ -75,7 +78,10 @@ export function WysiwygEditor(): React.JSX.Element {
           crossRef: crossRefNodeView,
           rawLatex: rawLatexNodeView,
           preamble: preambleNodeView,
-          theoremEnv: theoremNodeView
+          theoremEnv: theoremNodeView,
+          codeBlock: codeBlockNodeView,
+          caption: captionNodeView,
+          footnote: footnoteNodeView
         },
         dispatchTransaction(tx) {
           const newState = view.state.apply(tx)

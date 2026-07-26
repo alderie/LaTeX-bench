@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { parseLatexToDoc } from '@renderer/editor/wysiwyg/latex-to-doc'
 import * as labelRegistry from '@renderer/editor/wysiwyg/labelRegistry'
+import { fixture } from './helpers'
 
 describe('labelRegistry', () => {
   it('numbers theorems with section.theorem and resolves \\cref text', async () => {
@@ -100,5 +101,36 @@ We cite \\citep{smith2020,jones2021} and \\citet{doe2019}.
     // Heuristic short-label extraction (best-effort).
     expect(labelRegistry.getCitation('jones2021')!.shortLabel).toContain('2021')
     expect(labelRegistry.getCitation('doe2019')!.shortLabel).toContain('et al.')
+  })
+})
+
+describe('labelRegistry — floats and appendix', () => {
+  it('numbers tables, algorithms and figures so \cref resolves them', async () => {
+    const { doc } = await parseLatexToDoc(fixture('heavy-tail-paper.tex'))
+    labelRegistry.rebuild(doc)
+    expect(labelRegistry.getLabel('tab:regression')).toMatchObject({
+      kind: 'table',
+      shortNumber: '1',
+      pretty: 'Table 1'
+    })
+    expect(labelRegistry.getLabel('alg:cmd')).toMatchObject({
+      kind: 'algorithm',
+      shortNumber: '1',
+      pretty: 'Algorithm 1'
+    })
+    expect(labelRegistry.getLabel('fig:convergence')).toMatchObject({
+      kind: 'figure',
+      shortNumber: '1',
+      pretty: 'Figure 1'
+    })
+  })
+
+  it('letters sections after \appendix', async () => {
+    const { doc } = await parseLatexToDoc(fixture('heavy-tail-paper.tex'))
+    labelRegistry.rebuild(doc)
+    // Before \appendix: ordinary numbering.
+    expect(labelRegistry.getLabel('sec:intro')?.pretty).toBe('Section 1')
+    // After it: "Appendix A", not "Section 6".
+    expect(labelRegistry.getLabel('app:proofs')?.pretty).toBe('Appendix A')
   })
 })

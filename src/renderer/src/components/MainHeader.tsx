@@ -4,6 +4,7 @@ import { useUiStore } from '../stores/uiStore'
 import { usePaperStore } from '../stores/paperStore'
 import { useLibraryStore } from '../stores/libraryStore'
 import { ViewModeToggle } from './ViewModeToggle'
+import { WindowControls } from './WindowControls'
 
 export function MainHeader(): React.JSX.Element {
   const sidebarOpen = useUiStore((s) => s.sidebarOpen)
@@ -47,7 +48,10 @@ export function MainHeader(): React.JSX.Element {
 
       <div className="main-header__spacer" />
 
-      <div className="main-header__actions">{paperId && <ViewModeToggle />}</div>
+      <div className="main-header__actions">
+        {paperId && <ViewModeToggle />}
+        <WindowControls />
+      </div>
     </header>
   )
 }

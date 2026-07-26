@@ -63,9 +63,14 @@ describe('parser — inline marks', () => {
     expect(text).toContain('https://example.com/x')
   })
 
-  it('substitutes known icon macros to Unicode glyphs', async () => {
+  it('substitutes known icon macros to Unicode glyphs, keeping the macro', async () => {
     const doc = await parseBody('Email \\Letter\\ contact.')
-    expect(flatText(doc)).toContain('✉')
+    // The glyph lives on a rawInline node rather than in the text stream:
+    // rendering `✉` is right for the WYSIWYG view, but writing a literal
+    // `✉` back into the .tex file is not, so the source is kept alongside.
+    const icons = allOfType(doc, 'rawInline').filter((n) => n.attrs.display === '✉')
+    expect(icons.length).toBe(1)
+    expect(icons[0].attrs.source).toBe('\\Letter')
   })
 
   it('drops silent layout macros (\\centering, \\noindent, …)', async () => {

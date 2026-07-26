@@ -263,13 +263,24 @@ function injectEquationTags(latex: string, pos: number | undefined): string {
   if (typeof pos !== 'number') return latex
   const tags = getEquationNumbersForPos(pos)
   if (!tags || tags.length === 0) return latex
-  const envMatch = /^(\s*\\begin\{[a-zA-Z]+\*?\})([\s\S]*?)(\\end\{[a-zA-Z]+\*?\}\s*)$/.exec(latex)
+  const envMatch = /^(\s*)\\begin\{([a-zA-Z]+)(\*?)\}([\s\S]*?)\\end\{[a-zA-Z]+\*?\}(\s*)$/.exec(
+    latex
+  )
   if (!envMatch) return latex
-  const [, open, body, close] = envMatch
-  // Single-line env (equation) — append \tag{N} just before \end if numbered.
+  const [, lead, envName, , body, trail] = envMatch
+  // Render through the STARRED variant and supply every number ourselves.
+  // KaTeX numbers rows of `align`/`gather` automatically starting from 1,
+  // which both restarted the count in each block and put numbers on rows
+  // the document marked `\nonumber` (we strip `\nonumber` for KaTeX, so it
+  // can't see them). Starred envs never auto-number, so `\tag{N}` is the
+  // only thing that shows.
+  const open = `${lead}\\begin{${envName}*}`
+  const close = `\\end{${envName}*}${trail}`
+
+  // Single-line env (equation) — append \tag{N} just before \end.
   if (tags.length === 1) {
     if (tags[0]) return `${open}${body.trimEnd()} \\tag{${tags[0]}}\n${close}`
-    return latex
+    return `${open}${body}${close}`
   }
   const segments = splitOnRowBreak(body)
   if (segments.length !== tags.length) return latex // shape mismatch — leave alone

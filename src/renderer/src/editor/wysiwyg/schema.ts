@@ -82,20 +82,19 @@ const nodes: { [name: string]: NodeSpec } = {
     defining: true,
     attrs: { level: { default: 1 } },
     parseDOM: [
-      {
-        tag: 'h1',
-        attrs: { level: 1 }
-      },
-      {
-        tag: 'h2',
-        attrs: { level: 2 }
-      },
-      {
-        tag: 'h3',
-        attrs: { level: 3 }
-      }
+      { tag: 'h1', attrs: { level: 1 } },
+      { tag: 'h2', attrs: { level: 2 } },
+      { tag: 'h3', attrs: { level: 3 } },
+      { tag: 'h4', attrs: { level: 4 } },
+      { tag: 'h5', attrs: { level: 5 } }
     ],
-    toDOM: (node) => [`h${Math.min(3, Math.max(1, node.attrs.level as number))}`, 0]
+    // Levels 4/5 are \paragraph / \subparagraph — LaTeX renders them
+    // run-in (bold lead-in on the same line as the body). The CSS keys
+    // off data-level to reproduce that.
+    toDOM: (node) => {
+      const level = Math.min(5, Math.max(1, node.attrs.level as number))
+      return [`h${level}`, { 'data-level': String(level) }, 0]
+    }
   },
 
   paragraph: {
@@ -144,7 +143,9 @@ const nodes: { [name: string]: NodeSpec } = {
       src: { default: '' },
       caption: { default: '' },
       label: { default: null as string | null },
-      width: { default: null as string | null }
+      width: { default: null as string | null },
+      // The `[htbp]` float placement, verbatim.
+      placement: { default: '' }
     },
     parseDOM: [
       {
@@ -155,7 +156,8 @@ const nodes: { [name: string]: NodeSpec } = {
             src: el.dataset.src ?? '',
             caption: el.dataset.caption ?? '',
             label: el.dataset.label || null,
-            width: el.dataset.width || null
+            width: el.dataset.width || null,
+            placement: el.dataset.placement ?? ''
           }
         }
       }
@@ -168,6 +170,7 @@ const nodes: { [name: string]: NodeSpec } = {
           'data-figure': '',
           'data-src': node.attrs.src as string,
           'data-caption': (node.attrs.caption as string) ?? '',
+          ...(node.attrs.placement ? { 'data-placement': node.attrs.placement as string } : {}),
           ...(label
             ? {
                 'data-label': label,
@@ -198,25 +201,205 @@ const nodes: { [name: string]: NodeSpec } = {
   listBlock: {
     group: 'block',
     content: 'listItem+',
-    attrs: { kind: { default: 'itemize' } }, // 'itemize' | 'enumerate'
+    attrs: {
+      kind: { default: 'itemize' }, // 'itemize' | 'enumerate' | 'description'
+      // enumitem's `[…]` argument (`label=(\roman*)`, `leftmargin=*`, …)
+      // kept verbatim so the list's appearance round-trips.
+      options: { default: '' }
+    },
     parseDOM: [
       {
         tag: 'ul',
-        attrs: { kind: 'itemize' }
+        getAttrs: (dom) => ({
+          kind: (dom as HTMLElement).dataset.kind || 'itemize',
+          options: (dom as HTMLElement).dataset.options ?? ''
+        })
       },
       {
         tag: 'ol',
-        attrs: { kind: 'enumerate' }
+        getAttrs: (dom) => ({
+          kind: 'enumerate',
+          options: (dom as HTMLElement).dataset.options ?? ''
+        })
+      },
+      {
+        tag: 'dl',
+        getAttrs: (dom) => ({
+          kind: 'description',
+          options: (dom as HTMLElement).dataset.options ?? ''
+        })
       }
     ],
-    toDOM: (node) => [node.attrs.kind === 'enumerate' ? 'ol' : 'ul', 0]
+    toDOM: (node) => {
+      const kind = node.attrs.kind as string
+      const tag = kind === 'enumerate' ? 'ol' : 'ul'
+      return [
+        tag,
+        {
+          'data-kind': kind,
+          ...(node.attrs.options ? { 'data-options': node.attrs.options as string } : {})
+        },
+        0
+      ]
+    }
   },
 
   listItem: {
     content: 'paragraph (paragraph | listBlock)*',
     defining: true,
-    parseDOM: [{ tag: 'li' }],
-    toDOM: () => ['li', 0]
+    // `\item[term]` in a description list (and enumitem's `[label]`
+    // override elsewhere) — kept verbatim so it round-trips.
+    attrs: { marker: { default: null as string | null } },
+    parseDOM: [
+      {
+        tag: 'li',
+        getAttrs: (dom) => ({ marker: (dom as HTMLElement).dataset.marker || null })
+      }
+    ],
+    toDOM: (node) => [
+      'li',
+      node.attrs.marker ? { 'data-marker': node.attrs.marker as string } : {},
+      0
+    ]
+  },
+
+  // Verbatim-ish code environments: verbatim, lstlisting, minted, alltt,
+  // Verbatim (fancyvrb). The body is stored byte-exact so a round-trip is
+  // lossless; `options` keeps the raw `[…]` argument (e.g. `language=Python`)
+  // and `language` is the best-effort language name pulled out of it.
+  codeBlock: {
+    group: 'block',
+    atom: true,
+    selectable: true,
+    attrs: {
+      code: { default: '' },
+      env: { default: 'verbatim' },
+      options: { default: '' },
+      language: { default: '' }
+    },
+    parseDOM: [
+      {
+        tag: 'pre[data-code-block]',
+        getAttrs: (dom) => {
+          const el = dom as HTMLElement
+          return {
+            code: el.textContent ?? '',
+            env: el.dataset.env ?? 'verbatim',
+            options: el.dataset.options ?? '',
+            language: el.dataset.language ?? ''
+          }
+        }
+      }
+    ],
+    toDOM: (node) => [
+      'pre',
+      {
+        'data-code-block': '',
+        'data-env': node.attrs.env as string,
+        ...(node.attrs.options ? { 'data-options': node.attrs.options as string } : {}),
+        ...(node.attrs.language ? { 'data-language': node.attrs.language as string } : {})
+      },
+      node.attrs.code as string
+    ]
+  },
+
+  // A LaTeX float (`table`, `algorithm`, or a `figure` whose body is more
+  // than a bare \includegraphics). Unlike the atom `figure` node this keeps
+  // the body as real block content, so tikzpicture / tabular / algorithmic
+  // payloads survive editing instead of being dropped on serialize.
+  floatBlock: {
+    group: 'block',
+    content:
+      '(caption | paragraph | mathBlock | listBlock | rawLatex | figureImage | codeBlock | floatBlock | figure | theoremEnv)+',
+    defining: true,
+    attrs: {
+      kind: { default: 'table' }, // table | algorithm | figure | center | …
+      // Everything between `\begin{kind}` and the body, verbatim and with
+      // its delimiters — `[t]`, `[b]{0.5\linewidth}`, `{99}`. Kept as raw
+      // text because these arguments are package-specific and re-printing
+      // them from the AST rewrites them.
+      args: { default: '' },
+      label: { default: null as string | null },
+      centering: { default: false }
+    },
+    parseDOM: [
+      {
+        tag: 'div[data-float]',
+        getAttrs: (dom) => {
+          const el = dom as HTMLElement
+          return {
+            kind: el.dataset.kind ?? 'table',
+            args: el.dataset.args ?? '',
+            label: el.dataset.label || null,
+            centering: el.dataset.centering === '1'
+          }
+        }
+      }
+    ],
+    toDOM: (node) => {
+      const label = node.attrs.label as string | null
+      return [
+        'div',
+        {
+          'data-float': '',
+          class: 'float-block',
+          'data-kind': node.attrs.kind as string,
+          ...(node.attrs.args ? { 'data-args': node.attrs.args as string } : {}),
+          ...(node.attrs.centering ? { 'data-centering': '1' } : {}),
+          ...(label
+            ? {
+                'data-label': label,
+                id: `latex-anchor-${label.replace(/[^a-zA-Z0-9_-]/g, '-')}`
+              }
+            : {})
+        },
+        0
+      ]
+    }
+  },
+
+  // `\caption{…}` inside a float. Inline content so math in captions works.
+  caption: {
+    content: 'inline*',
+    defining: true,
+    attrs: { short: { default: null as string | null } },
+    parseDOM: [{ tag: 'figcaption[data-caption]' }],
+    toDOM: () => ['figcaption', { 'data-caption': '', class: 'float-block__caption' }, 0]
+  },
+
+  // A bare `\includegraphics` inside a float body. (The standalone `figure`
+  // node above stays for simple single-image figures.)
+  figureImage: {
+    group: 'block',
+    atom: true,
+    selectable: true,
+    attrs: {
+      src: { default: '' },
+      width: { default: null as string | null },
+      options: { default: '' }
+    },
+    parseDOM: [
+      {
+        tag: 'img[data-figure-image]',
+        getAttrs: (dom) => {
+          const el = dom as HTMLElement
+          return {
+            src: el.dataset.src ?? '',
+            width: el.dataset.width || null,
+            options: el.dataset.options ?? ''
+          }
+        }
+      }
+    ],
+    toDOM: (node) => [
+      'img',
+      {
+        'data-figure-image': '',
+        'data-src': node.attrs.src as string,
+        ...(node.attrs.width ? { 'data-width': node.attrs.width as string } : {}),
+        ...(node.attrs.options ? { 'data-options': node.attrs.options as string } : {})
+      }
+    ]
   },
 
   // Theorem-like environments (theorem, lemma, definition, proposition,
@@ -226,7 +409,7 @@ const nodes: { [name: string]: NodeSpec } = {
   // \begin{kind}[title] ... \end{kind}.
   theoremEnv: {
     group: 'block',
-    content: '(paragraph | mathBlock | listBlock | rawLatex | figure)+',
+    content: '(paragraph | mathBlock | listBlock | rawLatex | figure | codeBlock | floatBlock | figureImage)+',
     defining: true,
     attrs: {
       kind: { default: 'theorem' },
@@ -405,24 +588,103 @@ const nodes: { [name: string]: NodeSpec } = {
     toDOM: (node) => ['span', { 'data-math-inline': '', 'data-latex': node.attrs.latex as string }, '']
   },
 
-  citation: {
+  // `\footnote{…}` / `\thanks{…}`. The body is kept as raw LaTeX on the
+  // node so it round-trips byte-for-byte; the node view renders a
+  // superscript marker plus a hover popover with the rendered text.
+  footnote: {
     group: 'inline',
     inline: true,
     atom: true,
     selectable: true,
-    attrs: { keys: { default: [] as string[] } },
+    attrs: {
+      source: { default: '' },
+      cmd: { default: 'footnote' } // 'footnote' | 'thanks' | 'footnotetext'
+    },
     parseDOM: [
       {
-        tag: 'span[data-citation]',
+        tag: 'sup[data-footnote]',
         getAttrs: (dom) => {
-          const raw = (dom as HTMLElement).dataset.keys ?? ''
-          return { keys: raw.split(',').filter(Boolean) }
+          const el = dom as HTMLElement
+          return { source: el.dataset.source ?? '', cmd: el.dataset.cmd ?? 'footnote' }
+        }
+      }
+    ],
+    toDOM: (node) => [
+      'sup',
+      {
+        'data-footnote': '',
+        'data-source': node.attrs.source as string,
+        'data-cmd': node.attrs.cmd as string
+      },
+      ''
+    ]
+  },
+
+  // An inline macro we can't model but must not lose (`\verb|…|`, an
+  // unknown zero-arg macro, …). Renders as its literal source.
+  rawInline: {
+    group: 'inline',
+    inline: true,
+    atom: true,
+    selectable: true,
+    attrs: {
+      source: { default: '' }, // exact LaTeX to re-emit
+      display: { default: '' } // what to show in the WYSIWYG view
+    },
+    parseDOM: [
+      {
+        tag: 'span[data-raw-inline]',
+        getAttrs: (dom) => {
+          const el = dom as HTMLElement
+          return { source: el.dataset.source ?? '', display: el.textContent ?? '' }
         }
       }
     ],
     toDOM: (node) => [
       'span',
-      { 'data-citation': '', 'data-keys': (node.attrs.keys as string[]).join(',') },
+      { 'data-raw-inline': '', 'data-source': node.attrs.source as string },
+      node.attrs.display as string
+    ]
+  },
+
+  citation: {
+    group: 'inline',
+    inline: true,
+    atom: true,
+    selectable: true,
+    attrs: {
+      keys: { default: [] as string[] },
+      // Which cite command this came from, so `\citep`/`\citet`/`\parencite`
+      // survive a round-trip instead of collapsing to plain `\cite`.
+      cmd: { default: 'cite' },
+      // natbib/biblatex optional notes: `\citep[see][p.~4]{key}`.
+      prenote: { default: null as string | null },
+      postnote: { default: null as string | null }
+    },
+    parseDOM: [
+      {
+        tag: 'span[data-citation]',
+        getAttrs: (dom) => {
+          const el = dom as HTMLElement
+          const raw = el.dataset.keys ?? ''
+          return {
+            keys: raw.split(',').filter(Boolean),
+            cmd: el.dataset.cmd || 'cite',
+            prenote: el.dataset.prenote ?? null,
+            postnote: el.dataset.postnote ?? null
+          }
+        }
+      }
+    ],
+    toDOM: (node) => [
+      'span',
+      {
+        'data-citation': '',
+        'data-keys': (node.attrs.keys as string[]).join(','),
+        'data-cmd': node.attrs.cmd as string,
+        ...(node.attrs.prenote !== null ? { 'data-prenote': node.attrs.prenote as string } : {}),
+        ...(node.attrs.postnote !== null ? { 'data-postnote': node.attrs.postnote as string } : {})
+      },
       ''
     ]
   },

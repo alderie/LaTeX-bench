@@ -11,7 +11,8 @@ import type {
   PaperMeta,
   PaperSettings,
   SettingsAPI,
-  WindowAPI
+  WindowAPI,
+  WindowState
 } from '../shared/types'
 
 const paperAPI: PaperAPI = {
@@ -70,7 +71,16 @@ const settingsAPI: SettingsAPI = {
 }
 
 const windowAPI: WindowAPI = {
-  setTitleBarOverlay: (overlay) => ipcRenderer.invoke('window:setTitleBarOverlay', overlay)
+  setChromeColor: (color: string) => ipcRenderer.invoke('window:setChromeColor', color),
+  minimize: () => ipcRenderer.invoke('window:minimize'),
+  toggleMaximize: () => ipcRenderer.invoke('window:toggleMaximize'),
+  close: () => ipcRenderer.invoke('window:close'),
+  getState: () => ipcRenderer.invoke('window:getState'),
+  onStateChanged: (cb) => {
+    const listener = (_: unknown, state: WindowState) => cb(state)
+    ipcRenderer.on('window:state-changed', listener)
+    return () => ipcRenderer.removeListener('window:state-changed', listener)
+  }
 }
 
 // Expose APIs only with context isolation enabled (default). Fallback to

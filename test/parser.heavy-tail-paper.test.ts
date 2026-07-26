@@ -70,17 +70,126 @@ describe('parser — heavy-tail paper (broad LaTeX surface)', () => {
     expect(allLatex).toContain('\\sigma')
   })
 
-  it('captures truly unknown environments (algorithm, lstlisting, tabular) as rawLatex blocks', async () => {
+  it('captures truly unknown environments as byte-exact rawLatex blocks', async () => {
     const { doc } = await parseLatexToDoc(fixture('heavy-tail-paper.tex'))
     const raws = allOfType(doc, 'rawLatex').map((n) => (n.attrs.source as string).trim())
     const joined = raws.join('\n\n--\n\n')
-    expect(joined).toMatch(/\\begin\{algorithm\}/)
-    expect(joined).toMatch(/\\begin\{lstlisting\}/)
-    // \begin{table} is treated as a transparent container; the inner
-    // \begin{tabular} is what carries the row data and surfaces as rawLatex.
-    expect(joined).toMatch(/\\begin\{tabular\}/)
-    // \begin{tikzpicture} lives inside a \begin{figure} which is parsed as a
-    // structured figure node; the tikz body is not currently surfaced.
+    // algorithmic / tabular / tikzpicture have no first-class node, so they
+    // stay raw — but with their environment arguments and internal line
+    // breaks intact, which is what the tabular renderer needs to lay out
+    // columns and what a round-trip needs to not rewrite the file.
+    expect(joined).toMatch(/\\begin\{algorithmic\}\[1\]/)
+    expect(joined).toMatch(/\\begin\{tabular\}\{lccc\}/)
+    expect(joined).toMatch(/\\begin\{tikzpicture\}\[scale=0\.95\]/)
+    expect(joined).toContain('\\toprule\n')
+  })
+
+  it('promotes float environments (table, algorithm) to floatBlock nodes', async () => {
+    const { doc } = await parseLatexToDoc(fixture('heavy-tail-paper.tex'))
+    const floats = allOfType(doc, 'floatBlock')
+    const byKind = new Map(floats.map((f) => [f.attrs.kind as string, f]))
+    // `abstract` is a layout-only container but uses the same node, so its
+    // \begin/\end survives a save instead of being silently deleted.
+    expect([...byKind.keys()].sort()).toEqual(['abstract', 'algorithm', 'figure', 'table'])
+
+    const algorithm = byKind.get('algorithm')!
+    expect(algorithm.attrs.label).toBe('alg:cmd')
+    expect(algorithm.attrs.args).toBe('[t]')
+    expect(flatText(firstOfType(algorithm, 'caption')!)).toBe('Clipped Mirror Descent (CMD)')
+
+    const table = byKind.get('table')!
+    expect(table.attrs.label).toBe('tab:regression')
+    expect(table.attrs.centering).toBe(true)
+    // A caption with inline math keeps the math as a real node.
+    const caption = firstOfType(table, 'caption')!
+    expect(allOfType(caption, 'mathInline').length).toBe(1)
+
+    // The tikzpicture figure is a float too — previously its body was
+    // dropped on serialize because the atom `figure` node had nowhere to
+    // put it.
+    const fig = byKind.get('figure')!
+    expect(fig.attrs.label).toBe('fig:convergence')
+    const rawInFig = allOfType(fig, 'rawLatex').map((n) => n.attrs.source as string)
+    expect(rawInFig.some((s) => s.includes('\\begin{tikzpicture}'))).toBe(true)
+  })
+
+  it('parses lstlisting into a codeBlock with its language', async () => {
+    const { doc } = await parseLatexToDoc(fixture('heavy-tail-paper.tex'))
+    const code = allOfType(doc, 'codeBlock')
+    expect(code.length).toBe(1)
+    expect(code[0].attrs.env).toBe('lstlisting')
+    expect(code[0].attrs.language).toBe('Python')
+    const body = code[0].attrs.code as string
+    expect(body.startsWith('def cmd_step(')).toBe(true)
+    expect(body).toContain('    g_norm = dual_norm(g)')
+    // The \begin/\end delimiters are not part of the body.
+    expect(body).not.toContain('lstlisting')
+  })
+
+  it('keeps \\verb content as literal text with its delimiter', async () => {
+    const { doc } = await parseLatexToDoc(fixture('heavy-tail-paper.tex'))
+    const verbs = allOfType(doc, 'rawInline').filter((n) =>
+      (n.attrs.source as string).startsWith('\\verb')
+    )
+    expect(verbs.length).toBe(1)
+    // TeX ends \verb at the FIRST repeat of the delimiter, so the fixture's
+    // `\verb|… / ||g||)|` really does stop early — we match that rather
+    // than guessing. What matters is that the body is preserved verbatim
+    // instead of being re-parsed as LaTeX (which ate characters before).
+    expect(verbs[0].attrs.display).toBe('g_hat = g * min(1, tau / ')
+    expect(verbs[0].attrs.source).toBe('\\verb|g_hat = g * min(1, tau / |')
+  })
+
+  it('turns \\footnote and \\thanks into footnote nodes rather than inlining the body', async () => {
+    const { doc } = await parseLatexToDoc(fixture('heavy-tail-paper.tex'))
+    const notes = allOfType(doc, 'footnote')
+    expect(notes.map((n) => n.attrs.cmd).sort()).toEqual(['footnote', 'thanks'])
+    const thanks = notes.find((n) => n.attrs.cmd === 'thanks')!
+    expect(thanks.attrs.source).toContain('Corresponding author')
+    // The note body must not leak into the surrounding prose.
+    const text = flatText(doc)
+    expect(text).not.toContain('ReyesCorresponding author')
+    expect(text).not.toContain('variance.A simple counterexample')
+  })
+
+  it('renders \\paragraph as a level-4 heading instead of running it into the prose', async () => {
+    const { doc } = await parseLatexToDoc(fixture('heavy-tail-paper.tex'))
+    const runIn = allOfType(doc, 'section').filter((s) => s.attrs.level === 4)
+    const titles = runIn.map((s) => flatText(firstOfType(s, 'sectionTitle')!))
+    expect(titles).toEqual(['Contributions.', 'Notation.', 'Limitations.'])
+    expect(flatText(doc)).not.toContain('Contributions. This paper makes')
+  })
+
+  it('applies TeX dash ligatures across split string nodes', async () => {
+    const { doc } = await parseLatexToDoc(fixture('heavy-tail-paper.tex'))
+    const text = flatText(doc)
+    // `---` and `--` arrive from unified-latex as separate one-character
+    // string nodes, so a per-node replace never fired.
+    expect(text).toContain('the inner update — in pseudocode')
+    expect(text).not.toContain('---')
+    expect(text).toContain('167–175')
+  })
+
+  it('does not emit an empty raw block for \\noindent', async () => {
+    const { doc } = await parseLatexToDoc(fixture('heavy-tail-paper.tex'))
+    const raws = allOfType(doc, 'rawLatex').map((n) => (n.attrs.source as string).trim())
+    expect(raws).not.toContain('\\noindent')
+    // …but it still round-trips, as an invisible inline node.
+    const invisible = allOfType(doc, 'rawInline').filter((n) => n.attrs.display === '')
+    expect(invisible.some((n) => n.attrs.source === '\\noindent')).toBe(true)
+  })
+
+  it('keeps enumitem list options and \\citep-style commands', async () => {
+    const { doc } = await parseLatexToDoc(fixture('heavy-tail-paper.tex'))
+    const lists = allOfType(doc, 'listBlock')
+    const options = lists.map((l) => l.attrs.options as string)
+    expect(options).toContain('label=(\\roman*)')
+    expect(options).toContain('leftmargin=*')
+
+    const cites = allOfType(doc, 'citation')
+    const cmds = new Set(cites.map((c) => c.attrs.cmd as string))
+    expect(cmds.has('citep')).toBe(true)
+    expect(cmds.has('citet')).toBe(true)
   })
 
   it('promotes theorem-like envs to first-class theoremEnv blocks', async () => {
@@ -135,8 +244,10 @@ describe('parser — heavy-tail paper (broad LaTeX surface)', () => {
     expect(m['\\KL']).toBe('\\operatorname{KL}')
     // starred form → \operatorname*
     expect(m['\\argmin']).toBe('\\operatorname*{arg\\,min}')
-    // \label is seeded as a no-op so it doesn't bleed into adjacent tokens.
-    expect(m['\\label']).toBe('')
+    // \label is NOT seeded here. MathNodeView defines it as a function
+    // macro that consumes its `{key}` argument; seeding `''` made KaTeX
+    // treat it as 0-arg and the key rendered as visible math ("eq:upper").
+    expect(m['\\label']).toBeUndefined()
   })
 
   it('treats \\maketitle as a titleBlock and \\appendix as a rawLatex block', async () => {

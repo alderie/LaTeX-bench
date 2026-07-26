@@ -11,6 +11,7 @@ export type LabelKind =
   | 'equation'
   | 'figure'
   | 'table'
+  | 'algorithm'
   | 'unknown'
 
 export interface ResolvedLabel {
@@ -46,12 +47,21 @@ export interface RegistryState {
   // block's position (the value getPos() returns inside its NodeView).
   // null entries mark unnumbered lines (`\nonumber`/`\notag`/`*`-variants).
   equationNumbersByPos: Map<number, Array<string | null>>
+  // Caption prefix for each numbered float ("Table", "1"), keyed by the
+  // float node's absolute position so its caption can render "Table 1: …".
+  floatNumbersByPos: Map<number, FloatNumber>
+}
+
+export interface FloatNumber {
+  kindLabel: string
+  number: string
 }
 
 const emptyState = (): RegistryState => ({
   byKey: new Map(),
   citations: new Map(),
-  equationNumbersByPos: new Map()
+  equationNumbersByPos: new Map(),
+  floatNumbersByPos: new Map()
 })
 
 let state: RegistryState = emptyState()
@@ -81,13 +91,17 @@ interface BuildContext {
   byKey: Map<string, ResolvedLabel>
   citations: Map<string, ResolvedCitation>
   equationNumbersByPos: Map<number, Array<string | null>>
+  floatNumbersByPos: Map<number, FloatNumber>
   // Counters
   sectionCounters: number[] // index = level - 1
   theoremCounter: number // shared across all theorem-like envs (via [theorem])
   equationCounter: number
   figureCounter: number
   tableCounter: number
+  algorithmCounter: number
   bibitemCounter: number
+  // After \appendix, sections are lettered (A, B, …) instead of numbered.
+  inAppendix: boolean
 }
 
 function makeContext(): BuildContext {
@@ -95,12 +109,15 @@ function makeContext(): BuildContext {
     byKey: new Map(),
     citations: new Map(),
     equationNumbersByPos: new Map(),
+    floatNumbersByPos: new Map(),
     sectionCounters: [0, 0, 0],
     theoremCounter: 0,
     equationCounter: 0,
     figureCounter: 0,
     tableCounter: 0,
-    bibitemCounter: 0
+    algorithmCounter: 0,
+    bibitemCounter: 0,
+    inAppendix: false
   }
 }
 
@@ -110,7 +127,27 @@ const KIND_LABEL: Record<LabelKind, string> = {
   equation: 'Equation',
   figure: 'Figure',
   table: 'Table',
+  algorithm: 'Algorithm',
   unknown: ''
+}
+
+// floatBlock kinds that carry their own counter. Layout-only wrappers
+// (`center`, `minipage`, `abstract`) are deliberately absent — they aren't
+// numbered and shouldn't consume a number if they happen to be labelled.
+const FLOAT_KINDS: Record<string, LabelKind> = {
+  table: 'table',
+  'table*': 'table',
+  sidewaystable: 'table',
+  wraptable: 'table',
+  figure: 'figure',
+  'figure*': 'figure',
+  sidewaysfigure: 'figure',
+  wrapfigure: 'figure',
+  subfigure: 'figure',
+  algorithm: 'algorithm',
+  'algorithm*': 'algorithm',
+  listing: 'algorithm',
+  'listing*': 'algorithm'
 }
 
 // Per-environment kind label override for theorem-like envs. The schema
@@ -243,6 +280,18 @@ function extractLabelFromMathChunk(chunk: string): string | null {
 
 // ── Walking the PM doc ───────────────────────────────────────────────
 
+// LaTeX numbers appendix chapters/sections with letters: A, B, … Z, AA…
+function alphaCounter(n: number): string {
+  let out = ''
+  let k = n
+  while (k > 0) {
+    const rem = (k - 1) % 26
+    out = String.fromCharCode(65 + rem) + out
+    k = Math.floor((k - 1) / 26)
+  }
+  return out || '0'
+}
+
 function walkSection(ctx: BuildContext, node: PMNode, _parentNumber: string): void {
   const level = (node.attrs.level as number) ?? 1
   const starred = (node.attrs.starred as boolean) ?? false
@@ -251,10 +300,17 @@ function walkSection(ctx: BuildContext, node: PMNode, _parentNumber: string): vo
     ctx.sectionCounters[level - 1]++
     for (let k = level; k < ctx.sectionCounters.length; k++) ctx.sectionCounters[k] = 0
   }
-  const number = starred ? '' : ctx.sectionCounters.slice(0, level).join('.')
+  const parts = ctx.sectionCounters.slice(0, level).map((c, i) => {
+    // Only the top level goes alphabetic — `A`, `A.1`, `A.1.1`.
+    if (ctx.inAppendix && i === 0) return alphaCounter(c)
+    return String(c)
+  })
+  const number = starred ? '' : parts.join('.')
 
   const labels = (node.attrs.labels as string[] | undefined) ?? []
   const anchorKey = labels[0]
+  // cleveref calls a top-level section after \appendix an "Appendix".
+  const kindLabel = ctx.inAppendix && level === 1 ? 'Appendix' : KIND_LABEL.section
   for (const key of labels) {
     registerLabel(
       ctx,
@@ -264,8 +320,8 @@ function walkSection(ctx: BuildContext, node: PMNode, _parentNumber: string): vo
         number,
         shortNumber: number,
         eqrefText: number,
-        pretty: number ? `${KIND_LABEL.section} ${number}` : '',
-        kindLabel: KIND_LABEL.section
+        pretty: number ? `${kindLabel} ${number}` : '',
+        kindLabel
       },
       anchorKey
     )
@@ -336,6 +392,35 @@ function walkFigure(ctx: BuildContext, node: PMNode): void {
     pretty: `${KIND_LABEL.figure} ${number}`,
     kindLabel: KIND_LABEL.figure
   })
+}
+
+// `\begin{table}`/`\begin{algorithm}`/… — numbered per kind, and the
+// source of the `??` cross-references that used to show up for
+// `\cref{tab:…}` and `\cref{alg:…}`, since the whole float was one
+// opaque raw block before and never registered its label.
+function walkFloat(
+  ctx: BuildContext,
+  node: PMNode
+): { kindLabel: string; number: string } | null {
+  const kind = FLOAT_KINDS[(node.attrs.kind as string) ?? '']
+  if (!kind) return null
+  const number =
+    kind === 'table'
+      ? String(++ctx.tableCounter)
+      : kind === 'figure'
+        ? String(++ctx.figureCounter)
+        : String(++ctx.algorithmCounter)
+  const key = node.attrs.label as string | null
+  const kindLabel = KIND_LABEL[kind]
+  registerLabel(ctx, key, {
+    kind,
+    number,
+    shortNumber: number,
+    eqrefText: number,
+    pretty: `${kindLabel} ${number}`,
+    kindLabel
+  })
+  return { kindLabel, number }
 }
 
 function walkBibitem(ctx: BuildContext, node: PMNode): void {
@@ -410,7 +495,18 @@ function walkBlock(ctx: BuildContext, node: PMNode, parentNumber: string): void 
       // walkBlock is not given a position — handled in the walker pass.
       return
     case 'figure':
-      walkFigure(ctx, node)
+    case 'floatBlock':
+      // Numbered in the position-aware pass so captions can look up their
+      // own "Table 1:" prefix; recurse for theorems nested inside a float.
+      node.forEach((child) => walkBlock(ctx, child, parentNumber))
+      return
+    case 'rawLatex':
+      // `\appendix` switches top-level section numbering to letters, so
+      // \cref{app:proofs} reads "Appendix A" and not "Section 6".
+      if (/^\s*\\appendix\b/.test((node.attrs.source as string) ?? '')) {
+        ctx.inAppendix = true
+        ctx.sectionCounters = ctx.sectionCounters.map(() => 0)
+      }
       return
     case 'bibliography':
       node.forEach((child) => {
@@ -429,14 +525,28 @@ export function rebuild(doc: PMNode): void {
   // bump counters in document order.
   doc.forEach((child) => walkBlock(ctx, child, ''))
 
-  // Second pass for mathBlocks, where we need their absolute position.
-  // Sections etc. don't increment the equation counter, so doing math
-  // in a separate pass is fine — equations are document-order numbered.
+  // Second pass for nodes that need their absolute position: equations
+  // (per-line tags) and floats (so a caption can render "Table 1:").
+  // Both are numbered in document order, independent of sections, so a
+  // separate pass is safe.
   ctx.equationCounter = 0
   doc.descendants((node, pos) => {
     if (node.type.name === 'mathBlock') {
       walkMathBlock(ctx, node, pos)
       return false // don't descend (atom anyway)
+    }
+    if (node.type.name === 'figure') {
+      walkFigure(ctx, node)
+      ctx.floatNumbersByPos.set(pos, {
+        kindLabel: KIND_LABEL.figure,
+        number: String(ctx.figureCounter)
+      })
+      return false
+    }
+    if (node.type.name === 'floatBlock') {
+      const before = walkFloat(ctx, node)
+      if (before) ctx.floatNumbersByPos.set(pos, before)
+      return true
     }
     return true
   })
@@ -444,7 +554,8 @@ export function rebuild(doc: PMNode): void {
   state = {
     byKey: ctx.byKey,
     citations: ctx.citations,
-    equationNumbersByPos: ctx.equationNumbersByPos
+    equationNumbersByPos: ctx.equationNumbersByPos,
+    floatNumbersByPos: ctx.floatNumbersByPos
   }
   notify()
 }
@@ -460,4 +571,8 @@ export function getCitation(key: string): ResolvedCitation | undefined {
 
 export function getEquationNumbersForPos(pos: number): Array<string | null> | undefined {
   return state.equationNumbersByPos.get(pos)
+}
+
+export function getFloatNumberForPos(pos: number): FloatNumber | undefined {
+  return state.floatNumbersByPos.get(pos)
 }

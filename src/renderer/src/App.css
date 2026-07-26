@@ -197,15 +197,13 @@
      gap (icon button has a 28px bounding box around a ~14px glyph, so a
      box-to-box gap looks tight compared to text-to-chip). */
   gap: 12px;
-  /* Reserve ~148px on the right for the Windows titleBarOverlay buttons
-     (min/max/close) so action icons never slide under them. On macOS the
-     traffic-light buttons are top-left, so we mirror with left padding only
-     when the sidebar is closed (handled below). */
-  padding: 0 148px 0 12px;
+  /* The window buttons are now in-app (see WindowControls), so there's no
+     native overlay to leave room for — the header just needs its own
+     padding. On macOS the traffic lights are top-left, handled below. */
+  padding: 0 8px 0 12px;
   flex-shrink: 0;
   -webkit-app-region: drag;
   background: var(--bg-primary);
-  border-bottom: 1px solid var(--border-color);
   z-index: 200;
 }
 
@@ -276,6 +274,52 @@
   align-items: center;
   gap: 4px;
   -webkit-app-region: no-drag;
+}
+
+/* ── In-app window controls ───────────────────────────────────────────
+   Minimise / maximise / close, drawn by the renderer because the window
+   is frameless. Sized on the Windows convention (46×32) so the hit areas
+   feel native, but coloured with the app's own tokens. */
+.window-controls {
+  display: flex;
+  align-items: center;
+  align-self: stretch;
+  margin-left: 8px;
+  -webkit-app-region: no-drag;
+}
+
+.window-control {
+  width: 44px;
+  height: 100%;
+  min-height: 32px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.window-control:hover {
+  background: var(--overlay-hover);
+  color: var(--text-primary);
+}
+.window-control:active {
+  background: var(--bg-secondary);
+}
+/* Close follows the platform convention of turning red on hover. */
+.window-control--close:hover {
+  background: #e81123;
+  color: #ffffff;
+}
+.window-control--close:active {
+  background: #f1707a;
+  color: #ffffff;
+}
+.window-control svg {
+  shape-rendering: crispEdges;
 }
 
 /* Icon button — matches task-app's side-panel-icon-btn / panel-toggle-open. */
@@ -399,6 +443,17 @@
 .wysiwyg-editor .ProseMirror h1 { font-size: 1.55em; }
 .wysiwyg-editor .ProseMirror h2 { font-size: 1.25em; }
 .wysiwyg-editor .ProseMirror h3 { font-size: 1.05em; }
+/* \paragraph / \subparagraph are run-in headings in LaTeX: bold lead-in,
+   tight against the paragraph that follows. */
+.wysiwyg-editor .ProseMirror h4,
+.wysiwyg-editor .ProseMirror h5 {
+  font-family: var(--font-serif);
+  font-weight: 700;
+  font-size: 1em;
+  line-height: 1.2;
+  margin: 1.2em 0 0.3em 0;
+}
+.wysiwyg-editor .ProseMirror h5 { font-style: italic; font-weight: 600; }
 .wysiwyg-editor .ProseMirror em { font-style: italic; }
 .wysiwyg-editor .ProseMirror strong { font-weight: 700; }
 .wysiwyg-editor .ProseMirror code {
@@ -1196,3 +1251,192 @@
   cursor: pointer;
 }
 .find-bar__nav:hover { background: var(--overlay-hover); color: var(--text-primary); }
+
+/* ── Code blocks (verbatim, lstlisting, minted, …) ────────────────────
+   These used to render as raw-LaTeX blobs with visible \begin{lstlisting}
+   delimiters. Click anywhere to edit the body; the environment name and
+   its options round-trip untouched. */
+.code-block {
+  position: relative;
+  margin: 1.2em 0;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  overflow: hidden;
+  cursor: text;
+  transition: border-color 0.12s ease;
+}
+.code-block:hover { border-color: var(--accent-color, var(--text-secondary)); }
+.code-block__lang {
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+  color: var(--text-tertiary);
+  pointer-events: none;
+  user-select: none;
+}
+.code-block__body {
+  margin: 0;
+  padding: 12px 16px;
+  font-family: var(--font-mono);
+  font-size: 0.82em;
+  line-height: 1.55;
+  color: var(--text-primary);
+  white-space: pre;
+  overflow-x: auto;
+  tab-size: 4;
+}
+.code-block--editing { border-color: var(--accent-color, var(--text-primary)); }
+.code-block__editor {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 12px 16px;
+  border: 0;
+  outline: none;
+  resize: none;
+  overflow: hidden;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 0.82em;
+  line-height: 1.55;
+  white-space: pre;
+  tab-size: 4;
+}
+
+/* ── Floats (table, algorithm, figure) and layout containers ──────────
+   One node type covers both, so `\begin{center}`/`\begin{minipage}`
+   wrappers survive a save instead of being dropped. Only the numbered
+   float kinds get a caption prefix. */
+.float-block {
+  margin: 1.4em 0;
+}
+.float-block[data-centering='1'] { text-align: center; }
+.float-block[data-centering='1'] .ProseMirror-widget,
+.float-block[data-centering='1'] p { text-align: center; }
+.float-block[data-kind='center'] { text-align: center; }
+.float-block[data-kind='quote'],
+.float-block[data-kind='quotation'] {
+  margin-left: 2em;
+  margin-right: 2em;
+  font-size: 0.96em;
+  color: var(--text-secondary);
+}
+.float-block[data-kind='abstract'] {
+  margin: 1.5em 2.5em 2em;
+  font-size: 0.95em;
+}
+.float-block[data-kind='abstract']::before {
+  content: 'Abstract';
+  display: block;
+  text-align: center;
+  font-family: var(--font-serif);
+  font-weight: 700;
+  margin-bottom: 0.5em;
+}
+
+.float-block__caption {
+  display: block;
+  margin: 0.7em auto 0;
+  max-width: 46em;
+  font-size: 0.88em;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  text-align: center;
+}
+/* "Table 1:" — a non-editable prefix rendered by the caption node view
+   from the label registry, so it renumbers live as floats move around. */
+.float-block__caption-prefix {
+  font-weight: 700;
+  color: var(--paper-text, var(--text-primary));
+  user-select: none;
+}
+
+/* ── Footnote markers ─────────────────────────────────────────────────
+   \footnote / \thanks bodies used to be flattened into the surrounding
+   prose. Now they collapse to a numbered superscript with the note text
+   in a hover popover. */
+.wysiwyg-editor .ProseMirror { counter-reset: footnote; }
+.footnote-marker {
+  position: relative;
+  counter-increment: footnote;
+  font-size: 0.7em;
+  line-height: 0;
+  vertical-align: super;
+  color: var(--accent-color, var(--text-primary));
+  cursor: pointer;
+  padding: 0 1px;
+}
+.footnote-marker::before {
+  content: counter(footnote);
+  font-family: var(--font-sans);
+  font-weight: 600;
+}
+.footnote-marker[data-cmd='thanks']::before { content: '*'; }
+.footnote-marker__note {
+  display: none;
+  position: absolute;
+  bottom: 1.6em;
+  left: 0;
+  z-index: 50;
+  width: max-content;
+  max-width: 28em;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.18);
+  font-family: var(--font-serif);
+  font-size: 12px;
+  line-height: 1.45;
+  vertical-align: baseline;
+  color: var(--text-primary);
+  text-align: left;
+  white-space: normal;
+}
+.footnote-marker:hover .footnote-marker__note { display: block; }
+.footnote-marker__editor {
+  display: block;
+  width: 22em;
+  min-height: 4em;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 6px 8px;
+  border: 1px solid var(--accent-color, var(--text-primary));
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  outline: none;
+  resize: vertical;
+  vertical-align: baseline;
+}
+
+/* ── Raw inline escape hatch ──────────────────────────────────────────
+   Spacing macros, icon glyphs, and layout macros keep their LaTeX source
+   so a save doesn't rewrite them. Layout-only ones render nothing. */
+[data-raw-inline]:empty { display: none; }
+[data-raw-inline] { white-space: pre-wrap; }
+
+/* Unknown zero-arg macros show their source, dimmed, so it's obvious the
+   editor didn't understand them rather than silently dropping them. */
+[data-raw-inline]:not(:empty) {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+}
+
+/* Bare \includegraphics inside a float body. */
+[data-figure-image] {
+  display: block;
+  max-width: 100%;
+  margin: 0.6em auto;
+  min-height: 120px;
+  border: 1px dashed var(--border-color);
+  background: var(--bg-secondary);
+}

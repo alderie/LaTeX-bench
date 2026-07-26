@@ -163,6 +163,46 @@ function renderBlock(node, macros) {
     }
     case 'rawLatex':
       return `<pre class="raw-latex-block">${escapeHtml(node.attrs.source ?? '')}</pre>`
+    case 'codeBlock': {
+      const lang = node.attrs.language || node.attrs.env || 'verbatim'
+      return `<div class="code-block">
+  <span class="code-block__lang">${escapeHtml(lang)}</span>
+  <pre class="code-block__body">${escapeHtml(node.attrs.code ?? '')}</pre>
+</div>`
+    }
+    case 'floatBlock': {
+      let inner = ''
+      node.forEach((child) => (inner += renderBlock(child, macros)))
+      const kind = node.attrs.kind ?? 'table'
+      const label = node.attrs.label ?? ''
+      return `<div class="float-block" data-kind="${escapeHtml(kind)}"${
+        node.attrs.centering ? ' data-centering="1"' : ''
+      }${label ? ` data-label="${escapeHtml(label)}"` : ''}>${inner}</div>`
+    }
+    case 'caption':
+      return `<figcaption class="float-block__caption">${renderInline(node, macros)}</figcaption>`
+    case 'figureImage':
+      return `<img data-figure-image class="figure-block__image figure-block__image--empty" alt="figure" data-src="${escapeHtml(
+        node.attrs.src ?? ''
+      )}">`
+    case 'titleBlock': {
+      let inner = ''
+      node.forEach((child) => (inner += renderBlock(child, macros)))
+      return `<div data-title-block>${inner}</div>`
+    }
+    case 'titleHeading':
+      return `<h1 class="title-block__title">${renderInline(node, macros)}</h1>`
+    case 'authorList': {
+      let inner = ''
+      node.forEach((child) => (inner += renderBlock(child, macros)))
+      return `<div class="title-block__authors">${inner}</div>`
+    }
+    case 'authorEntry':
+      return `<div class="title-block__author">${renderInline(node, macros)}</div>`
+    case 'titleDate':
+      return `<div class="title-block__date" data-kind="${escapeHtml(
+        node.attrs.kind ?? 'literal'
+      )}">${renderInline(node, macros)}</div>`
     case 'listBlock': {
       const tag = node.attrs.kind === 'enumerate' ? 'ol' : 'ul'
       let inner = ''
@@ -206,7 +246,10 @@ function renderBlock(node, macros) {
 </li>`
     }
     default:
-      return ''
+      // Loud rather than silent: an unhandled node type here means the
+      // preview is showing less than the editor does.
+      console.warn(`[render-preview] no renderer for block node "${node.type.name}"`)
+      return `<pre class="raw-latex-block">&lt;${escapeHtml(node.type.name)}&gt;</pre>`
   }
 }
 
@@ -230,6 +273,19 @@ function renderInline(node, macros = {}) {
         case 'crossRef':
           html += `<span class="cross-ref-chip">→ ${escapeHtml(child.attrs.label ?? '')}</span>`
           break
+        case 'footnote':
+          html += `<sup class="footnote-marker" data-cmd="${escapeHtml(
+            child.attrs.cmd ?? 'footnote'
+          )}" title="${escapeHtml(child.attrs.source ?? '')}"></sup>`
+          break
+        case 'rawInline':
+          html += `<span data-raw-inline>${escapeHtml(child.attrs.display ?? '')}</span>`
+          break
+        case 'hardBreak':
+          html += '<br>'
+          break
+        default:
+          console.warn(`[render-preview] no renderer for inline node "${child.type.name}"`)
       }
     }
   })

@@ -3,7 +3,9 @@ import { Node as PMNode, Mark } from 'prosemirror-model'
 const SECTION_MACRO_BY_LEVEL: Record<number, string> = {
   1: 'section',
   2: 'subsection',
-  3: 'subsubsection'
+  3: 'subsubsection',
+  4: 'paragraph',
+  5: 'subparagraph'
 }
 
 export function serializeDocToLatex(doc: PMNode): string {
@@ -110,6 +112,20 @@ function serializeBlock(node: PMNode): string {
       return serializeTheorem(node)
     case 'bibliography':
       return serializeBibliography(node)
+    case 'codeBlock':
+      return serializeCodeBlock(node)
+    case 'floatBlock':
+      return serializeFloat(node)
+    case 'caption': {
+      const short = node.attrs.short as string | null
+      const opt = short ? `[${short}]` : ''
+      return `\n\\caption${opt}{${serializeInline(node).trim()}}\n`
+    }
+    case 'figureImage': {
+      const options = (node.attrs.options as string) || ''
+      const opt = options ? `[${options}]` : ''
+      return `\n\\includegraphics${opt}{${node.attrs.src as string}}\n`
+    }
     case 'titleBlock':
       // The metadata is round-tripped through the preamble already (via
       // serializeTitleMetadata); the block itself becomes a bare
@@ -158,7 +174,8 @@ function serializeFigure(node: PMNode): string {
   const label = node.attrs.label as string | null
   const width = node.attrs.width as string | null
   const optional = width ? `[width=${width}]` : ''
-  let out = '\n\\begin{figure}[htbp]\n  \\centering\n'
+  const placement = (node.attrs.placement as string) || 'htbp'
+  let out = `\n\\begin{figure}[${placement}]\n  \\centering\n`
   if (src) out += `  \\includegraphics${optional}{${src}}\n`
   if (caption) out += `  \\caption{${caption}}\n`
   if (label) out += `  \\label{${label}}\n`
@@ -166,17 +183,45 @@ function serializeFigure(node: PMNode): string {
   return out
 }
 
+function serializeCodeBlock(node: PMNode): string {
+  const env = (node.attrs.env as string) || 'verbatim'
+  const options = (node.attrs.options as string) || ''
+  const opt = options ? `[${options}]` : ''
+  const code = node.attrs.code as string
+  // No indentation and no trimming: inside a verbatim environment every
+  // character between the delimiters is content.
+  return `\n\\begin{${env}}${opt}\n${code}\n\\end{${env}}\n`
+}
+
+function serializeFloat(node: PMNode): string {
+  const kind = (node.attrs.kind as string) || 'table'
+  const label = node.attrs.label as string | null
+  const open = `\\begin{${kind}}${(node.attrs.args as string) || ''}`
+  let body = ''
+  if (node.attrs.centering as boolean) body += '\n\\centering\n'
+  node.forEach((child) => {
+    body += serializeBlock(child)
+  })
+  if (label) body += `\n\\label{${label}}\n`
+  return `\n${open}\n${body.trim()}\n\\end{${kind}}\n`
+}
+
 function serializeList(node: PMNode): string {
-  const env = node.attrs.kind === 'enumerate' ? 'enumerate' : 'itemize'
+  const kind = (node.attrs.kind as string) || 'itemize'
+  const env =
+    kind === 'enumerate' ? 'enumerate' : kind === 'description' ? 'description' : 'itemize'
+  const options = (node.attrs.options as string) || ''
+  const opt = options ? `[${options}]` : ''
   const items: string[] = []
   node.forEach((item) => {
     let body = ''
     item.forEach((child) => {
       body += serializeBlock(child)
     })
-    items.push(`  \\item ${body.trim()}`)
+    const marker = item.attrs.marker as string | null
+    items.push(`  \\item${marker ? `[${marker}]` : ''} ${body.trim()}`)
   })
-  return `\n\\begin{${env}}\n${items.join('\n')}\n\\end{${env}}\n`
+  return `\n\\begin{${env}}${opt}\n${items.join('\n')}\n\\end{${env}}\n`
 }
 
 function serializeInline(node: PMNode): string {
@@ -198,8 +243,26 @@ function serializeInlineChild(node: PMNode): string {
     }
     case 'citation': {
       const keys = (node.attrs.keys as string[]) ?? []
-      return `\\cite{${keys.join(',')}}`
+      const cmd = (node.attrs.cmd as string) || 'cite'
+      const prenote = node.attrs.prenote as string | null
+      const postnote = node.attrs.postnote as string | null
+      // natbib reads a lone `[…]` as the POSTnote, so a prenote always
+      // has to be written together with a (possibly empty) postnote.
+      const notes =
+        prenote !== null
+          ? `[${prenote}][${postnote ?? ''}]`
+          : postnote !== null
+            ? `[${postnote}]`
+            : ''
+      return `\\${cmd}${notes}{${keys.join(',')}}`
     }
+    case 'footnote': {
+      const cmd = (node.attrs.cmd as string) || 'footnote'
+      if (cmd === 'footnotemark') return '\\footnotemark'
+      return `\\${cmd}{${node.attrs.source as string}}`
+    }
+    case 'rawInline':
+      return node.attrs.source as string
     case 'crossRef': {
       const cmd = (node.attrs.cmd as string) || 'ref'
       const keys = (node.attrs.keys as string[]) ?? []
@@ -210,7 +273,12 @@ function serializeInlineChild(node: PMNode): string {
     case 'hardBreak':
       return '\\\\'
     default:
-      return ''
+      // Same reasoning as serializeBlock's default: silently returning ''
+      // would delete the node from the .tex file on the next save.
+      throw new Error(
+        `[doc-to-latex] no serializer for inline node type "${node.type.name}". ` +
+          `Refusing to write — this would silently drop content from the .tex file.`
+      )
   }
 }
 
@@ -254,5 +322,7 @@ function escapeLatex(s: string): string {
     .replace(/\^/g, '\\textasciicircum{}')
     .replace(/—/g, '---')
     .replace(/–/g, '--')
+    .replace(/“/g, '``')
+    .replace(/”/g, "''")
     .replace(/ /g, '~')
 }

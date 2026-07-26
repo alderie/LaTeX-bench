@@ -112,6 +112,18 @@ export interface SettingsAPI {
   save: (settings: AppSettings) => Promise<void>
 }
 
+export interface WindowState {
+  maximized: boolean
+  fullScreen: boolean
+}
+
 export interface WindowAPI {
-  setTitleBarOverlay: (overlay: { color: string; symbolColor: string }) => Promise<void>
+  /** Keeps the native window background in sync with the resolved theme. */
+  setChromeColor: (color: string) => Promise<void>
+  minimize: () => Promise<void>
+  /** Maximises or restores; resolves to the new maximised state. */
+  toggleMaximize: () => Promise<boolean>
+  close: () => Promise<void>
+  getState: () => Promise<WindowState>
+  onStateChanged: (cb: (state: WindowState) => void) => () => void
 }

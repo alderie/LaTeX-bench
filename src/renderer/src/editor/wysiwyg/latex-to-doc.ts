@@ -25,7 +25,84 @@ export async function loadPrintModule(): Promise<typeof import('@unified-latex/u
 const SECTION_MACROS: Record<string, number> = {
   section: 1,
   subsection: 2,
-  subsubsection: 3
+  subsubsection: 3,
+  // Run-in headings. LaTeX numbers them too (they just aren't shown by
+  // default in `article`), and treating them as text — which is what
+  // happened before — merged the heading into the following paragraph.
+  paragraph: 4,
+  subparagraph: 5
+}
+
+// ── Source-text access ──────────────────────────────────────────────────
+// unified-latex records byte offsets on every node. Reconstructing raw
+// LaTeX with `printRaw` collapses runs of whitespace into a single space
+// and drops environment arguments, which silently rewrites the user's
+// file on every save. Slicing the original source instead is byte-exact.
+//
+// Everything after `parse()` inside `parseLatexToDoc` runs synchronously,
+// so a module-level handle is safe here and saves threading a context
+// object through every helper.
+let sourceText = ''
+
+// Offset just past the balanced `{…}` / `[…]` group starting at `from`,
+// or null if there isn't one there.
+function balancedEnd(from: number, open: string, close: string): number | null {
+  if (sourceText[from] !== open) return null
+  let depth = 0
+  for (let i = from; i < sourceText.length; i++) {
+    const c = sourceText[i]
+    if (c === '\\') {
+      i++ // an escaped brace is not a delimiter
+      continue
+    }
+    if (c === open) depth++
+    else if (c === close) {
+      depth--
+      if (depth === 0) return i + 1
+    }
+  }
+  return null
+}
+
+function spanOf(node: any): [number, number] | null {
+  const start = node?.position?.start?.offset
+  let end = node?.position?.end?.offset
+  if (typeof start !== 'number' || typeof end !== 'number') return null
+  // A macro's `position` covers only the macro name, and unified-latex
+  // doesn't record positions on `argument` nodes — so walk the source
+  // forward over exactly as many delimited arguments as the macro has.
+  // (Environments already span `\begin`…`\end`, so they're left alone.)
+  if (node.type === 'macro') {
+    let cursor = end
+    for (const arg of node.args ?? []) {
+      if (arg?.openMark !== '{' && arg?.openMark !== '[') continue
+      let k = cursor
+      while (k < sourceText.length && /\s/.test(sourceText[k])) k++
+      const argEnd = balancedEnd(k, arg.openMark, arg.closeMark ?? (arg.openMark === '{' ? '}' : ']'))
+      if (argEnd === null) break
+      cursor = argEnd
+    }
+    end = cursor
+  }
+  if (end < start || end > sourceText.length) return null
+  return [start, end]
+}
+
+// Byte-exact source for a node, falling back to printRaw when the node
+// was synthesised (or positions are missing).
+function rawOf(node: any, printRaw: (n: AstNodeArr) => string): string {
+  const span = spanOf(node)
+  if (span) return sourceText.slice(span[0], span[1])
+  return printRaw([node])
+}
+
+// Byte-exact source spanning a run of sibling nodes.
+function rawOfRange(nodes: AstNodeArr, printRaw: (n: AstNodeArr) => string): string {
+  if (nodes.length === 0) return ''
+  const first = spanOf(nodes[0])
+  const last = spanOf(nodes[nodes.length - 1])
+  if (first && last && last[1] >= first[0]) return sourceText.slice(first[0], last[1])
+  return printRaw(nodes)
 }
 
 const MATH_BLOCK_ENVS = new Set([
@@ -41,7 +118,40 @@ const MATH_BLOCK_ENVS = new Set([
 ])
 
 const FIGURE_ENVS = new Set(['figure', 'figure*'])
-const LIST_ENVS = new Set(['itemize', 'enumerate'])
+const LIST_ENVS = new Set(['itemize', 'enumerate', 'description'])
+
+// Float environments that carry a `\caption` + `\label` and arbitrary
+// block content. Parsed into a `floatBlock` so the body survives editing
+// and the label lands in the cross-reference registry.
+const FLOAT_ENVS = new Set([
+  'table',
+  'table*',
+  'algorithm',
+  'algorithm*',
+  'listing',
+  'listing*',
+  'wrapfigure',
+  'wraptable',
+  'subfigure',
+  'sidewaystable',
+  'sidewaysfigure'
+])
+
+// Verbatim-ish code environments. Their bodies must never be re-parsed as
+// LaTeX — unified-latex already hands them to us as a single opaque string
+// (or a `verbatim` node), and we keep them byte-exact.
+const CODE_ENVS = new Set([
+  'verbatim',
+  'verbatim*',
+  'lstlisting',
+  'minted',
+  'alltt',
+  'Verbatim',
+  'BVerbatim',
+  'LVerbatim',
+  'semiverbatim',
+  'lstinputlisting'
+])
 
 // amsthm-style theorem-like envs. These are user-declared via \newtheorem
 // in a real document, but we hardcode the common names so the WYSIWYG view
@@ -127,7 +237,6 @@ const BLOCK_MACROS = new Set([
   'title',
   'author',
   'date',
-  'thanks',
   'subtitle',
   // bibliography helpers
   'nocite',
@@ -136,8 +245,7 @@ const BLOCK_MACROS = new Set([
   'vfill',
   'medskip',
   'bigskip',
-  'smallskip',
-  'noindent'
+  'smallskip'
 ])
 
 // Inline macros that wrap content and should recurse into their last
@@ -261,6 +369,9 @@ const KNOWN_INLINE_MACROS = new Set<string>([
   'href',
   'url',
   'label',
+  'footnote',
+  'thanks',
+  'footnotemark',
   ...TRANSPARENT_INLINE_WRAPPERS,
   ...Object.keys(ICON_MACRO_GLYPHS),
   ...SPACE_MACROS,
@@ -272,10 +383,15 @@ function hasRequiredArg(macro: any): boolean {
   return args.some((a: any) => a.openMark === '{')
 }
 
-function isInlineBufferOnlyWhitespace(buf: PMNode[]): boolean {
+// True when nothing buffered for the current paragraph would render —
+// whitespace, comments, and layout-only macros like `\small`/`\noindent`.
+// Used to decide whether a macro sits at "block position".
+function isBlankAstBuffer(buf: AstNodeArr): boolean {
   for (const n of buf) {
-    if (!n.isText) return false
-    if ((n.text ?? '').trim().length > 0) return false
+    if (n.type === 'whitespace' || n.type === 'comment' || n.type === 'parbreak') continue
+    if (n.type === 'macro' && SILENT_MACROS.has(n.content as string)) continue
+    if (n.type === 'string' && String(n.content ?? '').trim().length === 0) continue
+    return false
   }
   return true
 }
@@ -325,10 +441,41 @@ export interface ParseResult {
   mathMacros: Record<string, string>
 }
 
-export async function parseLatexToDoc(tex: string): Promise<ParseResult> {
+// Macros that take a single brace-delimited key list. Used by the repair
+// pass below.
+const KEY_LIST_MACROS =
+  'cite|citep|citet|Citep|Citet|citealp|citealt|citeauthor|citeyear|citeyearpar|' +
+  'parencite|Parencite|textcite|Textcite|autocite|footcite|citenum|' +
+  'ref|eqref|autoref|cref|Cref|pageref|nameref|vref|labelcref|label'
+
+// Undo damage earlier versions of this editor wrote to .tex files.
+//
+// When a `\citep{a,b}` failed to parse, the citation node ended up with no
+// keys and the `{a,b}` group leaked into the surrounding text. Serializing
+// that back out produced `\cite{}a,b` — an empty argument followed by the
+// keys as bare prose, which is why affected papers render `[?]` followed by
+// their own cite keys. `\macro{}` immediately butted against a key-shaped
+// run is never something a person writes, so folding it back in is safe.
+export function repairSerializerDamage(tex: string): string {
+  const re = new RegExp(
+    `\\\\(${KEY_LIST_MACROS})\\{\\}([A-Za-z0-9_:.+-]+(?:\\s*,\\s*[A-Za-z0-9_:.+-]+)*)`,
+    'g'
+  )
+  return tex.replace(re, (_match, macro: string, keys: string) => {
+    // A trailing period is sentence punctuation, not part of a cite key.
+    const trailing = /\.+$/.exec(keys)?.[0] ?? ''
+    const cleaned = trailing ? keys.slice(0, -trailing.length) : keys
+    if (!cleaned) return `\\${macro}{}${keys}`
+    return `\\${macro}{${cleaned.replace(/\s*,\s*/g, ',')}}${trailing}`
+  })
+}
+
+export async function parseLatexToDoc(input: string): Promise<ParseResult> {
   const { parse } = await loadParseModule()
   const { printRaw } = await loadPrintModule()
 
+  const tex = repairSerializerDamage(input)
+  sourceText = tex
   const ast = parse(tex)
   const root = ast.content as AstNodeArr
 
@@ -353,10 +500,22 @@ export async function parseLatexToDoc(tex: string): Promise<ParseResult> {
   // \maketitle to anchor them. Otherwise the metadata stays inside the
   // preamble source string, untouched, and round-trips byte-for-byte.
   const hasMaketitle = bodyHasMaketitle(bodyNodes)
-  const { titleMetadata, cleanedPreambleNodes } = hasMaketitle
+  const { titleMetadata, cleanedPreambleNodes, removedSpans } = hasMaketitle
     ? extractTitleMetadata(preambleNodes, printRaw)
-    : { titleMetadata: undefined, cleanedPreambleNodes: preambleNodes }
-  const preambleText = printRaw(cleanedPreambleNodes).trim()
+    : {
+        titleMetadata: undefined,
+        cleanedPreambleNodes: preambleNodes,
+        removedSpans: [] as Array<[number, number]>
+      }
+
+  // Prefer the original bytes for the preamble. printRaw normalises
+  // whitespace, so round-tripping through it reflowed `\usepackage` lines
+  // onto one line and doubled blank lines a little more on every save.
+  const docNodeStart = docStart >= 0 ? (root[docStart] as any)?.position?.start?.offset : undefined
+  const preambleText =
+    typeof docNodeStart === 'number'
+      ? cutSpans(tex.slice(0, docNodeStart), removedSpans).replace(/\s+$/, '')
+      : printRaw(cleanedPreambleNodes).trim()
 
   const blocks = nodesToBlocks(bodyNodes, printRaw, titleMetadata)
 
@@ -396,10 +555,30 @@ interface TitleMetadata {
   hasAny: boolean
 }
 
+// Remove a set of [start, end) source spans from `text`, leaving the rest
+// byte-exact. Spans are sorted and merged so overlaps are harmless.
+function cutSpans(text: string, spans: Array<[number, number]>): string {
+  if (spans.length === 0) return text
+  const sorted = [...spans].sort((a, b) => a[0] - b[0])
+  let out = ''
+  let cursor = 0
+  for (const [start, end] of sorted) {
+    if (end <= cursor) continue
+    if (start > cursor) out += text.slice(cursor, Math.min(start, text.length))
+    cursor = Math.max(cursor, end)
+  }
+  out += text.slice(cursor)
+  return out
+}
+
 function extractTitleMetadata(
   preamble: AstNodeArr,
   printRaw: (n: AstNodeArr) => string
-): { titleMetadata: TitleMetadata; cleanedPreambleNodes: AstNodeArr } {
+): {
+  titleMetadata: TitleMetadata
+  cleanedPreambleNodes: AstNodeArr
+  removedSpans: Array<[number, number]>
+} {
   const meta: TitleMetadata = {
     titleNodes: [],
     authorEntries: [],
@@ -408,11 +587,17 @@ function extractTitleMetadata(
     hasAny: false
   }
   const cleaned: AstNodeArr = []
+  const removedSpans: Array<[number, number]> = []
+  const drop = (n: any): void => {
+    const span = spanOf(n)
+    if (span) removedSpans.push(span)
+  }
   for (const n of preamble) {
     if (n.type === 'macro' && n.content === 'title') {
       const arg = (n.args ?? []).find((a: any) => a.openMark === '{')
       meta.titleNodes = arg?.content ?? []
       meta.hasAny = true
+      drop(n)
       continue
     }
     if (n.type === 'macro' && n.content === 'author') {
@@ -420,6 +605,7 @@ function extractTitleMetadata(
       const content: AstNodeArr = arg?.content ?? []
       meta.authorEntries = splitOnAnd(content)
       meta.hasAny = true
+      drop(n)
       continue
     }
     if (n.type === 'macro' && n.content === 'date') {
@@ -436,11 +622,12 @@ function extractTitleMetadata(
       meta.hasAny = true
       // Suppress today's literal text — date is rendered live in the view.
       void printRaw
+      drop(n)
       continue
     }
     cleaned.push(n)
   }
-  return { titleMetadata: meta, cleanedPreambleNodes: cleaned }
+  return { titleMetadata: meta, cleanedPreambleNodes: cleaned, removedSpans }
 }
 
 function splitOnAnd(content: AstNodeArr): AstNodeArr[] {
@@ -472,13 +659,11 @@ function extractMathMacros(
   preamble: AstNodeArr,
   printRaw: (n: AstNodeArr) => string
 ): Record<string, string> {
+  // Only what the preamble actually declares. `\label`/`\nonumber`/`\notag`
+  // are handled by MathNodeView's built-in macro table — seeding them here
+  // as `''` overrode its `\label` definition (which consumes the `{key}`
+  // argument), so equation labels rendered as visible math: "eq:upper".
   const macros: Record<string, string> = {}
-  // Sensible defaults — these are amsmath/amssymb commands KaTeX already
-  // knows but a stray \label inside math should be a no-op rather than
-  // bleeding into adjacent tokens.
-  macros['\\label'] = ''
-  macros['\\nonumber'] = ''
-  macros['\\notag'] = ''
 
   const macroNameOf = (arg: any): string | null => {
     if (!arg) return null
@@ -635,14 +820,19 @@ function nodesToBlocks(
     else blocks.push(node)
   }
 
-  let bufferInline: PMNode[] = []
+  // Paragraph content is buffered as AST nodes and converted in one
+  // `inlineNodes` call at flush time. Converting node-by-node used to
+  // split every run of text at each token boundary, which broke anything
+  // that looks across characters — TeX's `---`/`--` ligatures in
+  // particular, since unified-latex emits each `-` as its own node.
+  let bufferNodes: AstNodeArr = []
 
   const flushParagraph = (): void => {
-    const trimmed = trimInline(bufferInline)
+    const trimmed = trimInline(inlineNodes(bufferNodes, printRaw))
     if (trimmed.length > 0) {
       pushBlock(latexSchema.nodes.paragraph.create({}, trimmed))
     }
-    bufferInline = []
+    bufferNodes = []
   }
 
   // True if everything after `idx` until the next parbreak/section/env is
@@ -687,7 +877,7 @@ function nodesToBlocks(
   // after a macro — they're almost always its arguments that unified-latex
   // didn't recognize. Returns the next index to resume from.
   const consumeMacroBody = (idx: number): { source: string; next: number } => {
-    let source = printRaw([nodes[idx]])
+    let last = idx
     let j = idx + 1
     while (j < nodes.length) {
       const next = nodes[j]
@@ -696,7 +886,7 @@ function nodesToBlocks(
         continue
       }
       if (next.type === 'group') {
-        source += printRaw([next])
+        last = j
         j++
         continue
       }
@@ -704,7 +894,12 @@ function nodesToBlocks(
       // — too fragile to consume confidently, so we stop here.
       break
     }
-    return { source, next: j }
+    // Slice the original bytes across the macro and every group it
+    // swallowed, so `\cventry{a}{b}` keeps its exact spacing.
+    const source = rawOfRange(nodes.slice(idx, last + 1), printRaw)
+    // `next` must land after the last consumed group, not after the
+    // trailing whitespace/comments we skipped while looking ahead.
+    return { source, next: last + 1 }
   }
 
   for (let i = 0; i < nodes.length; i++) {
@@ -791,6 +986,24 @@ function nodesToBlocks(
     // macro since unified-latex doesn't capture user/package macro args
     // by default — `\cventry{a}{b}{c}` arrives as 1 macro + 3 separate
     // groups in the AST, and we need all four in the rawLatex source.
+    // A bare \includegraphics at block level (inside a float body, or a
+    // centred image with no figure wrapper).
+    if (n.type === 'macro' && n.content === 'includegraphics') {
+      flushParagraph()
+      const optional = (n.args ?? []).find((a: any) => a.openMark === '[')
+      const required = (n.args ?? []).find((a: any) => a.openMark === '{')
+      const options = optional ? printRaw(optional.content ?? []) : ''
+      const width = /width\s*=\s*([^,\]]+)/.exec(options)?.[1]?.trim() ?? null
+      pushBlock(
+        latexSchema.nodes.figureImage.create({
+          src: printRaw(required?.content ?? []).trim(),
+          width,
+          options
+        })
+      )
+      continue
+    }
+
     if (n.type === 'macro' && BLOCK_MACROS.has(n.content)) {
       flushParagraph()
       // \maketitle becomes a structured, editable titleBlock when we
@@ -829,28 +1042,60 @@ function nodesToBlocks(
     // Either case: greedily consume any trailing groups so they round-trip.
     if (
       n.type === 'macro' &&
-      isInlineBufferOnlyWhitespace(bufferInline) &&
+      isBlankAstBuffer(bufferNodes) &&
       !KNOWN_INLINE_MACROS.has(n.content) &&
       !followedByInlineContent(i) &&
       (hasRequiredArg(n) || nextNonSpaceIsGroup(i))
     ) {
-      bufferInline = []
+      bufferNodes = []
       const { source, next } = consumeMacroBody(i)
       pushBlock(latexSchema.nodes.rawLatex.create({ source }))
       i = next - 1 // -1 because the for-loop increments
       continue
     }
 
+    // `\begin{verbatim}` and friends arrive as a dedicated `verbatim` node
+    // whose content is one opaque string.
+    if (n.type === 'verbatim') {
+      flushParagraph()
+      pushBlock(
+        latexSchema.nodes.codeBlock.create({
+          code: stripEdgeNewlines(String((n as any).content ?? '')),
+          env: (n as any).env ?? 'verbatim',
+          options: '',
+          language: ''
+        })
+      )
+      continue
+    }
+
     if (n.type === 'environment') {
       flushParagraph()
+      if (CODE_ENVS.has(n.env)) {
+        pushBlock(buildCodeBlock(n, printRaw))
+        continue
+      }
       if (MATH_BLOCK_ENVS.has(n.env)) {
-        const latex = `\\begin{${n.env}}${printRaw(n.content)}\\end{${n.env}}`
         const label = extractLabel(n.content)
-        pushBlock(latexSchema.nodes.mathBlock.create({ latex, label }))
+        pushBlock(
+          latexSchema.nodes.mathBlock.create({
+            latex: rawOfEnvironment(n, printRaw),
+            label
+          })
+        )
         continue
       }
       if (FIGURE_ENVS.has(n.env)) {
-        pushBlock(buildFigure(n, printRaw))
+        // A figure whose body is nothing but \includegraphics/\caption/
+        // \label stays an atom `figure` node (simple, directly editable).
+        // Anything richer — tikzpicture, subfigures, tabular — becomes a
+        // floatBlock so the body isn't silently dropped on serialize.
+        const simple = buildSimpleFigure(n, printRaw)
+        pushBlock(simple ?? buildFloat(n, printRaw))
+        continue
+      }
+      if (FLOAT_ENVS.has(n.env)) {
+        pushBlock(buildFloat(n, printRaw))
         continue
       }
       if (LIST_ENVS.has(n.env)) {
@@ -858,12 +1103,11 @@ function nodesToBlocks(
         continue
       }
       if (CONTAINER_ENVS.has(n.env)) {
-        // Recurse into the body; each child becomes its own block. The
-        // env wrapper is structural-only and round-trips by re-emitting
-        // \begin{env}...\end{env} during serialization (handled by the
-        // serializer for known containers).
-        const inner = nodesToBlocks(n.content as AstNodeArr, printRaw)
-        for (const child of inner) pushBlock(child)
+        // Layout-only wrappers (`center`, `minipage`, `abstract`, …). They
+        // hold ordinary block content, so they use the same node as floats
+        // — which also means `\begin{center}`/`\end{center}` survives a
+        // save instead of being silently deleted along with its arguments.
+        pushBlock(buildFloat(n, printRaw))
         continue
       }
       if (THEOREM_ENVS.has(n.env)) {
@@ -874,12 +1118,11 @@ function nodesToBlocks(
         pushBlock(buildBibliography(n, printRaw))
         continue
       }
-      // Unknown environment → opaque rawLatex block.
-      pushBlock(
-        latexSchema.nodes.rawLatex.create({
-          source: `\\begin{${n.env}}${printRaw(n.content)}\\end{${n.env}}`
-        })
-      )
+      // Unknown environment → opaque rawLatex block. Slice the original
+      // source so the environment's arguments (`\begin{tabular}{lccc}`)
+      // and its internal line breaks survive; reconstructing it from
+      // `printRaw(n.content)` dropped both.
+      pushBlock(latexSchema.nodes.rawLatex.create({ source: rawOfEnvironment(n, printRaw) }))
       continue
     }
 
@@ -890,7 +1133,7 @@ function nodesToBlocks(
       flushParagraph()
       pushBlock(
         latexSchema.nodes.mathBlock.create({
-          latex: `\\[${printRaw(n.content ?? [])}\\]`,
+          latex: rawOf(n, printRaw).trim() || `\\[${printRaw(n.content ?? [])}\\]`,
           label: null
         })
       )
@@ -903,14 +1146,14 @@ function nodesToBlocks(
     // captured as inline math, which collapses the multi-line layout.
     //
     // The `env` field on mathenv is an Argument shape, not a plain string,
-    // so we let printRaw([n]) reconstitute the full `\begin{x}…\end{x}`
-    // form for storage; that string survives round-trip cleanly.
+    // so the full `\begin{x}…\end{x}` form is read straight back out of
+    // the source for storage.
     if (n.type === 'mathenv') {
       flushParagraph()
       const label = extractLabel((n as any).content ?? [])
       pushBlock(
         latexSchema.nodes.mathBlock.create({
-          latex: printRaw([n]).trim(),
+          latex: rawOf(n, printRaw).trim(),
           label
         })
       )
@@ -924,10 +1167,10 @@ function nodesToBlocks(
     // group and rendering them as raw text.
     if (
       n.type === 'group' &&
-      isInlineBufferOnlyWhitespace(bufferInline) &&
+      isBlankAstBuffer(bufferNodes) &&
       groupContainsBlockContent((n as any).content ?? [])
     ) {
-      bufferInline = []
+      bufferNodes = []
       const inner = nodesToBlocks((n as any).content ?? [], printRaw)
       for (const child of inner) pushBlock(child)
       continue
@@ -935,25 +1178,12 @@ function nodesToBlocks(
 
     // Inline-ish content collects into the current paragraph buffer.
     // For arg-consuming inline macros (\citep, \cref, …) whose `{…}` arg
-    // unified-latex couldn't capture as a real `args` slot, we have to
-    // hand the *macro AND its trailing group* to `inlineNodes` together
-    // — the lookahead in `inlineNodes` can only see what's in the array
-    // we pass it, and the default fallback passes one node at a time.
-    if (n.type === 'macro' && ARG_CONSUMING_INLINE_MACROS.has(n.content)) {
-      const chunk: AstNodeArr = [n]
-      for (let j = i + 1; j < nodes.length; j++) {
-        const t = nodes[j]
-        if (t.type === 'whitespace' || t.type === 'comment') continue
-        if (t.type === 'group') {
-          chunk.push(t)
-          i = j // consume the group from the outer loop
-        }
-        break
-      }
-      bufferInline.push(...inlineNodes(chunk, printRaw))
-      continue
-    }
-    bufferInline.push(...inlineNodes([n], printRaw))
+    // Everything else is inline: buffer the AST node and let
+    // `flushParagraph` convert the whole run at once. Batching is what
+    // lets `inlineNodes` look ahead — e.g. to fold the `{…}` group after
+    // `\citep` in as its argument when unified-latex didn't know the
+    // macro's signature.
+    bufferNodes.push(n)
   }
 
   flushParagraph()
@@ -1050,15 +1280,214 @@ function slugFromInline(inline: PMNode[]): string {
   return `${s}-${Math.random().toString(36).slice(2, 6)}`
 }
 
-function buildFigure(envNode: any, printRaw: (n: AstNodeArr) => string): PMNode {
-  // Look for \includegraphics{...} and \caption{...} \label{...} inside.
+// Byte-exact `\begin{env}…\end{env}`, arguments included.
+function rawOfEnvironment(envNode: any, printRaw: (n: AstNodeArr) => string): string {
+  const span = spanOf(envNode)
+  if (span) return sourceText.slice(span[0], span[1])
+  // Fallback: rebuild, keeping the environment's arguments this time.
+  const args = (envNode.args ?? [])
+    .map((a: any) => {
+      const inner = printRaw(a.content ?? [])
+      if (!a.openMark) return inner
+      return `${a.openMark}${inner}${a.closeMark ?? ''}`
+    })
+    .join('')
+  return `\\begin{${envNode.env}}${args}${printRaw(envNode.content ?? [])}\\end{${envNode.env}}`
+}
+
+// Environment arguments, read back from the original source. `printRaw`
+// would rewrite them (`\roman*` becomes `\roman{*}`, whitespace collapses),
+// which silently changed enumitem list styling on every save.
+function envArgTexts(
+  envNode: any,
+  printRaw: (n: AstNodeArr) => string
+): Array<{ openMark: string; text: string }> {
+  const args = (envNode.args ?? []).filter(
+    (a: any) => a.openMark === '[' || a.openMark === '{'
+  )
+  if (args.length === 0) return []
+  const start = envNode?.position?.start?.offset
+  if (typeof start === 'number') {
+    let cursor = start + `\\begin{${envNode.env}}`.length
+    const out: Array<{ openMark: string; text: string }> = []
+    let ok = true
+    for (const a of args) {
+      while (cursor < sourceText.length && /\s/.test(sourceText[cursor])) cursor++
+      const close = a.openMark === '[' ? ']' : '}'
+      const end = balancedEnd(cursor, a.openMark, close)
+      if (end === null) {
+        ok = false
+        break
+      }
+      out.push({ openMark: a.openMark, text: sourceText.slice(cursor + 1, end - 1) })
+      cursor = end
+    }
+    if (ok) return out
+  }
+  return args.map((a: any) => ({ openMark: a.openMark, text: printRaw(a.content ?? []) }))
+}
+
+// The `[…]` argument of an environment, without its brackets.
+function optionalArgText(envNode: any, printRaw: (n: AstNodeArr) => string): string {
+  return envArgTexts(envNode, printRaw).find((a) => a.openMark === '[')?.text ?? ''
+}
+
+// unified-latex only captures `[…]` as an argument for environments whose
+// signature it knows. For everything else (`\begin{algorithm}[t]`,
+// `\begin{theorem}[Title]`) the bracket group arrives as ordinary content
+// nodes, so strip it off the front by hand.
+function stripLeadingOptional(
+  content: AstNodeArr,
+  printRaw: (n: AstNodeArr) => string
+): { text: string | null; rest: AstNodeArr } {
+  const rest = content.slice()
+  let i = 0
+  while (i < rest.length && (rest[i].type === 'whitespace' || rest[i].type === 'comment')) i++
+  if (!(i < rest.length && rest[i].type === 'string' && rest[i].content === '[')) {
+    return { text: null, rest }
+  }
+  let depth = 1
+  let j = i + 1
+  const inner: AstNodeArr = []
+  while (j < rest.length && depth > 0) {
+    const t = rest[j]
+    if (t.type === 'string' && t.content === '[') depth++
+    if (t.type === 'string' && t.content === ']') {
+      depth--
+      if (depth === 0) break
+    }
+    inner.push(t)
+    j++
+  }
+  if (depth !== 0) return { text: null, rest }
+  rest.splice(i, j - i + 1)
+  return { text: printRaw(inner).trim() || null, rest }
+}
+
+// Verbatim body text keeps its interior formatting but loses the newline
+// that immediately follows `\begin{env}` and precedes `\end{env}` — those
+// are delimiters, not content.
+function stripEdgeNewlines(s: string): string {
+  return s.replace(/^\r?\n/, '').replace(/\r?\n[ \t]*$/, '')
+}
+
+function buildCodeBlock(envNode: any, printRaw: (n: AstNodeArr) => string): PMNode {
+  const env = envNode.env as string
+  const options = optionalArgText(envNode, printRaw)
+  // `lstlisting[language=Python]`, `minted{python}`, `Verbatim[…]`.
+  let language = /(?:^|,)\s*language\s*=\s*([A-Za-z+#-]+)/.exec(options)?.[1] ?? ''
+  if (!language && env === 'minted') {
+    const req = (envNode.args ?? []).find((a: any) => a.openMark === '{')
+    if (req) language = printRaw(req.content ?? []).trim()
+  }
+  // The body is a single opaque string for verbatim-like environments;
+  // slice the source anyway so nothing is normalised away.
+  let code = ''
+  const content = (envNode.content ?? []) as AstNodeArr
+  if (content.length === 1 && content[0].type === 'string') {
+    code = String(content[0].content ?? '')
+  } else {
+    code = rawOfRange(content, printRaw)
+  }
+  return latexSchema.nodes.codeBlock.create({
+    code: stripEdgeNewlines(code),
+    env,
+    options,
+    language
+  })
+}
+
+const FLOAT_BODY_ALLOWED = new Set([
+  'caption',
+  'paragraph',
+  'mathBlock',
+  'listBlock',
+  'rawLatex',
+  'figureImage',
+  'codeBlock',
+  'floatBlock',
+  'figure',
+  'theoremEnv'
+])
+
+// `\begin{table}[t] … \end{table}` and friends. The caption and label are
+// lifted onto the node (so the registry can number and resolve them) while
+// everything else stays as editable block content.
+function buildFloat(envNode: any, printRaw: (n: AstNodeArr) => string): PMNode {
+  const kind = envNode.env as string
+  // Arguments come from two places: ones unified-latex recognised (it
+  // knows `minipage`'s signature) and ones it didn't (`\begin{algorithm}[t]`
+  // arrives as plain `[`/`t`/`]` content nodes).
+  const captured = envArgTexts(envNode, printRaw)
+    .map((a) => (a.openMark === '[' ? `[${a.text}]` : `{${a.text}}`))
+    .join('')
+  const stripped = captured
+    ? { text: null, rest: (envNode.content ?? []) as AstNodeArr }
+    : stripLeadingOptional((envNode.content ?? []) as AstNodeArr, printRaw)
+  const args = captured || (stripped.text !== null ? `[${stripped.text}]` : '')
+  const content = stripped.rest
+
+  let label: string | null = null
+  let centering = false
+  const rest: AstNodeArr = []
+  const captionNodes: Array<{ index: number; node: PMNode }> = []
+
+  for (const child of content) {
+    if (child.type === 'macro' && child.content === 'label') {
+      const arg = (child.args ?? []).find((a: any) => a.openMark === '{')
+      label = label ?? (printRaw(arg?.content ?? []).trim() || null)
+      continue
+    }
+    if (child.type === 'macro' && child.content === 'centering') {
+      centering = true
+      continue
+    }
+    if (child.type === 'macro' && child.content === 'caption') {
+      const args = (child.args ?? []).filter((a: any) => a.openMark === '{')
+      const optional = (child.args ?? []).find((a: any) => a.openMark === '[')
+      const short = optional ? printRaw(optional.content ?? []).trim() || null : null
+      const inline = inlineNodes(args[args.length - 1]?.content ?? [], printRaw)
+      captionNodes.push({
+        index: rest.length,
+        node: latexSchema.nodes.caption.create({ short }, trimInline(inline))
+      })
+      continue
+    }
+    rest.push(child)
+  }
+
+  let blocks = nodesToBlocks(rest, printRaw)
+  // Re-insert captions where they appeared relative to the other content
+  // is more precision than we can recover after `nodesToBlocks` merges
+  // paragraphs, so: a caption written before any content leads, otherwise
+  // it trails. That matches how tables/algorithms are conventionally set.
+  const leading = captionNodes.filter((c) => c.index === 0).map((c) => c.node)
+  const trailing = captionNodes.filter((c) => c.index > 0).map((c) => c.node)
+  blocks = blocks.filter((b) => FLOAT_BODY_ALLOWED.has(b.type.name))
+  const children = [...leading, ...blocks, ...trailing]
+  if (children.length === 0) children.push(latexSchema.nodes.paragraph.create())
+
+  return latexSchema.nodes.floatBlock.create({ kind, args, label, centering }, children)
+}
+
+// A `figure` whose body is only \centering / \includegraphics / \caption /
+// \label — the shape the atom `figure` node can represent losslessly.
+// Returns null when the body holds anything else.
+function buildSimpleFigure(envNode: any, printRaw: (n: AstNodeArr) => string): PMNode | null {
   let src = ''
   let caption = ''
   let label: string | null = null
   let width: string | null = null
-  for (const child of envNode.content as AstNodeArr) {
-    if (child.type === 'macro') {
-      if (child.content === 'includegraphics') {
+  let sawImage = false
+  const captured = optionalArgText(envNode, printRaw)
+  const stripped = stripLeadingOptional((envNode.content ?? []) as AstNodeArr, printRaw)
+  const placement = captured || stripped.text || ''
+
+  for (const child of stripped.rest) {
+    if (child.type === 'whitespace' || child.type === 'comment' || child.type === 'parbreak') continue
+    if (child.type !== 'macro') return null
+    switch (child.content) {
+      case 'includegraphics': {
         const optional = (child.args ?? []).find((a: any) => a.openMark === '[')
         const required = (child.args ?? []).find((a: any) => a.openMark === '{')
         if (optional) {
@@ -1067,16 +1496,27 @@ function buildFigure(envNode: any, printRaw: (n: AstNodeArr) => string): PMNode 
           if (m) width = m[1].trim()
         }
         src = printRaw(required?.content ?? []).trim()
-      } else if (child.content === 'caption') {
-        const arg = (child.args ?? []).find((a: any) => a.openMark === '{')
+        sawImage = true
+        break
+      }
+      case 'caption': {
+        const arg = (child.args ?? []).filter((a: any) => a.openMark === '{').pop()
         caption = printRaw(arg?.content ?? []).trim()
-      } else if (child.content === 'label') {
+        break
+      }
+      case 'label': {
         const arg = (child.args ?? []).find((a: any) => a.openMark === '{')
         label = printRaw(arg?.content ?? []).trim() || null
+        break
       }
+      case 'centering':
+        break
+      default:
+        return null
     }
   }
-  return latexSchema.nodes.figure.create({ src, caption, label, width })
+  if (!sawImage) return null
+  return latexSchema.nodes.figure.create({ src, caption, label, width, placement })
 }
 
 function buildList(envNode: any, printRaw: (n: AstNodeArr) => string): PMNode {
@@ -1085,63 +1525,51 @@ function buildList(envNode: any, printRaw: (n: AstNodeArr) => string): PMNode {
   // Split on \item: each item's content is either that last arg (preferred)
   // or, as a fallback for parsers that emit it as siblings, the nodes
   // between this \item and the next.
-  const kind = envNode.env === 'enumerate' ? 'enumerate' : 'itemize'
-  const items: AstNodeArr[] = []
-  let current: AstNodeArr | null = null
+  const kind = envNode.env as string
+  // enumitem's `[label=(\roman*)]` / `[leftmargin=*]` — kept verbatim so
+  // the list numbering style isn't silently reset on the next save.
+  const options = optionalArgText(envNode, printRaw)
+  const items: Array<{ body: AstNodeArr; marker: string | null }> = []
+  let current: { body: AstNodeArr; marker: string | null } | null = null
   for (const child of envNode.content as AstNodeArr) {
     if (child.type === 'macro' && child.content === 'item') {
       if (current) items.push(current)
-      const args = (child.args ?? []) as Array<{ content?: AstNodeArr }>
-      const body = args.length > 0 ? (args[args.length - 1]?.content ?? []) : []
-      current = body.length > 0 ? [...body] : []
+      const args = (child.args ?? []) as Array<{ openMark?: string; content?: AstNodeArr }>
+      // `\item[term]` — the description-list term, or an enumitem label
+      // override. Either way it has to survive the round-trip.
+      const optional = args.find((a) => a.openMark === '[')
+      const marker = optional ? printRaw(optional.content ?? []).trim() || null : null
+      const bodyArgs = args.filter((a) => a.openMark !== '[')
+      const body = bodyArgs.length > 0 ? (bodyArgs[bodyArgs.length - 1]?.content ?? []) : []
+      current = { body: body.length > 0 ? [...body] : [], marker }
     } else if (current !== null) {
-      current.push(child)
+      current.body.push(child)
     }
   }
   if (current) items.push(current)
 
-  const itemNodes = items.map((arr) => {
-    const inline = inlineNodes(arr, printRaw)
+  const itemNodes = items.map((item) => {
+    const inline = inlineNodes(item.body, printRaw)
     const para = latexSchema.nodes.paragraph.create({}, trimInline(inline))
-    return latexSchema.nodes.listItem.create({}, [para])
+    return latexSchema.nodes.listItem.create({ marker: item.marker }, [para])
   })
 
   // Empty itemize → keep at least one empty bullet so structure stays.
   if (itemNodes.length === 0) {
     itemNodes.push(latexSchema.nodes.listItem.create({}, [latexSchema.nodes.paragraph.create()]))
   }
-  return latexSchema.nodes.listBlock.create({ kind }, itemNodes)
+  return latexSchema.nodes.listBlock.create({ kind, options }, itemNodes)
 }
 
 function buildTheorem(envNode: any, printRaw: (n: AstNodeArr) => string): PMNode {
   const kind = envNode.env as string
   // Optional `[title]` immediately after \begin{kind}. unified-latex
   // doesn't know the signature so it shows up as the first content node:
-  // a `string` of `[`, then content, then a `]`. Detect & strip.
-  const content = (envNode.content as AstNodeArr).slice()
-  let title: string | null = null
-  // Skip leading whitespace.
-  let i = 0
-  while (i < content.length && (content[i].type === 'whitespace' || content[i].type === 'comment')) i++
-  if (i < content.length && content[i].type === 'string' && content[i].content === '[') {
-    let depth = 1
-    let j = i + 1
-    const titleNodes: AstNodeArr = []
-    while (j < content.length && depth > 0) {
-      const t = content[j]
-      if (t.type === 'string' && t.content === '[') depth++
-      if (t.type === 'string' && t.content === ']') {
-        depth--
-        if (depth === 0) break
-      }
-      titleNodes.push(t)
-      j++
-    }
-    if (depth === 0) {
-      title = printRaw(titleNodes).trim() || null
-      content.splice(i, j - i + 1)
-    }
-  }
+  // a `string` of `[`, then content, then a `]`.
+  const { text: title, rest: content } = stripLeadingOptional(
+    envNode.content as AstNodeArr,
+    printRaw
+  )
 
   const label = extractLabel(content)
   let blocks = nodesToBlocks(content, printRaw)
@@ -1151,12 +1579,18 @@ function buildTheorem(envNode: any, printRaw: (n: AstNodeArr) => string): PMNode
   // Theorem schema only allows paragraph/mathBlock/listBlock/rawLatex/figure.
   // Strip out anything else (e.g. nested sections — unusual inside a
   // theorem) by rendering as rawLatex fallback.
-  const allowed = new Set(['paragraph', 'mathBlock', 'listBlock', 'rawLatex', 'figure'])
-  blocks = blocks.map((b) =>
-    allowed.has(b.type.name)
-      ? b
-      : latexSchema.nodes.rawLatex.create({ source: '' })
-  )
+  const allowed = new Set([
+    'paragraph',
+    'mathBlock',
+    'listBlock',
+    'rawLatex',
+    'figure',
+    'codeBlock',
+    'floatBlock',
+    'figureImage'
+  ])
+  blocks = blocks.filter((b) => allowed.has(b.type.name))
+  if (blocks.length === 0) blocks = [latexSchema.nodes.paragraph.create()]
   return latexSchema.nodes.theoremEnv.create({ kind, label, title }, blocks)
 }
 
@@ -1239,6 +1673,20 @@ function extractLabel(nodes: AstNodeArr): string | null {
 
 // ── Inline-level conversion ─────────────────────────────────────────────
 
+// TeX text ligatures: `---` is an em-dash, `--` an en-dash, `` ` `` and
+// `'` are directional quotes, and `~` is a non-breaking space. We map `~`
+// to U+00A0 rather than a plain space so `escapeLatex` can tell the two
+// apart and re-emit `~` on serialize.
+const NBSP = '\u00a0'
+function applyLigatures(s: string): string {
+  return s
+    .replace(/---/g, '—')
+    .replace(/--/g, '–')
+    .replace(/``/g, '“')
+    .replace(/''/g, '”')
+    .replace(/~/g, NBSP)
+}
+
 function inlineNodes(nodes: AstNodeArr, printRaw: (n: AstNodeArr) => string): PMNode[] {
   const out: PMNode[] = []
   let textBuf = ''
@@ -1247,29 +1695,47 @@ function inlineNodes(nodes: AstNodeArr, printRaw: (n: AstNodeArr) => string): PM
   const flushText = (): void => {
     if (textBuf.length === 0) return
     const marks = activeMarks.map((m) => latexSchema.marks[m].create())
-    out.push(latexSchema.text(textBuf, marks))
+    out.push(latexSchema.text(applyLigatures(textBuf), marks))
     textBuf = ''
   }
 
   for (let i = 0; i < nodes.length; i++) {
     const n = nodes[i]
     if (n.type === 'string') {
-      // Common LaTeX text shortcuts: ~ is a non-breaking space, --- is an
-      // em-dash, -- is an en-dash. Map them to their visible characters so
-      // the WYSIWYG view reads as prose. (escapeLatex on serialize would
-      // turn `~` into `\textasciitilde{}` — to avoid that, we map `~` to
-      // U+00A0 so the serializer can detect and re-emit `~`.)
-      let s = n.content as string
-      s = s.replace(/---/g, '—').replace(/--/g, '–').replace(/~/g, ' ')
-      textBuf += s
+      // Ligatures are applied to the accumulated buffer in `flushText`,
+      // not here: unified-latex splits punctuation into its own `string`
+      // nodes, so `---` arrives as three separate `-` nodes and a
+      // per-node replace never matched.
+      textBuf += n.content as string
+    } else if (n.type === 'verb') {
+      // \verb|…| — the body is literal text, never LaTeX. Keeping the
+      // exact delimiter means the round-trip re-emits identical source;
+      // before this the body fell through the macro path and came out
+      // mangled into stray pipes.
+      flushText()
+      const body = String((n as any).content ?? '')
+      const escape = String((n as any).escape ?? '|')
+      const env = String((n as any).env ?? 'verb')
+      out.push(
+        latexSchema.nodes.rawInline.create({
+          source: '\\' + env + escape + body + escape,
+          display: body
+        })
+      )
     } else if (n.type === 'whitespace') {
       textBuf += ' '
     } else if (n.type === 'comment') {
       // skip
     } else if (n.type === 'inlinemath' || n.type === 'mathenv') {
       flushText()
-      const latex = printRaw(n.content ?? [])
-      out.push(latexSchema.nodes.mathInline.create({ latex }))
+      // Byte-exact where possible: printRaw normalises math (`\R^d` comes
+      // back as `\R^{d}`, spaces around operators shift), so every save
+      // rewrote formulas the user never touched.
+      const raw = rawOf(n, printRaw).trim()
+      const inner = /^\$([\s\S]*)\$$/.exec(raw)?.[1]
+      out.push(
+        latexSchema.nodes.mathInline.create({ latex: inner ?? printRaw(n.content ?? []) })
+      )
     } else if (n.type === 'macro') {
       flushText()
       // Some inline macros (\cite, \citep, \ref, \cref, \href, …) need a
@@ -1302,19 +1768,43 @@ function inlineNodes(nodes: AstNodeArr, printRaw: (n: AstNodeArr) => string): PM
 // often doesn't capture (because the package declaring them isn't in
 // its built-in signature table). When we see one of these and it has
 // no `{`-arg, look ahead for a group sibling and attach it.
-const ARG_CONSUMING_INLINE_MACROS = new Set([
+const CITE_MACROS = new Set([
   'cite',
   'citep',
   'citet',
+  'Citep',
+  'Citet',
+  'citealp',
+  'citealt',
   'citeauthor',
   'citeyear',
+  'citeyearpar',
   'parencite',
+  'Parencite',
   'textcite',
+  'Textcite',
+  'autocite',
+  'footcite',
+  'citenum'
+])
+
+const REF_MACROS = new Set([
+  'ref',
+  'eqref',
+  'autoref',
   'cref',
   'Cref',
-  'autoref',
+  'crefrange',
+  'Crefrange',
+  'pageref',
   'nameref',
-  'pageref'
+  'vref',
+  'labelcref'
+])
+
+const ARG_CONSUMING_INLINE_MACROS = new Set([
+  ...CITE_MACROS,
+  ...REF_MACROS
 ])
 
 function absorbTrailingArg(
@@ -1346,23 +1836,41 @@ function macroToInline(
 ): PMNode | PMNode[] | null {
   const name = macro.content as string
 
-  if (name === 'cite' || name === 'citep' || name === 'citet' || name === 'citeauthor' || name === 'citeyear' || name === 'parencite' || name === 'textcite') {
+  // `\footnote{…}` / `\thanks{…}`. Keeping the body as raw LaTeX (rather
+  // than flattening it into the surrounding text, which is what used to
+  // happen) means the marker renders where it belongs and the note text
+  // round-trips unchanged.
+  if (name === 'footnote' || name === 'thanks' || name === 'footnotetext') {
+    const arg = (macro.args ?? []).filter((a: any) => a.openMark === '{').pop()
+    const source = printRaw(arg?.content ?? []).trim()
+    return latexSchema.nodes.footnote.create({ source, cmd: name })
+  }
+  if (name === 'footnotemark') {
+    return latexSchema.nodes.footnote.create({ source: '', cmd: 'footnotemark' })
+  }
+
+  if (CITE_MACROS.has(name)) {
     const arg = (macro.args ?? []).find((a: any) => a.openMark === '{')
     const keys = printRaw(arg?.content ?? [])
       .split(',')
       .map((s: string) => s.trim())
       .filter(Boolean)
-    return latexSchema.nodes.citation.create({ keys })
+    // natbib/biblatex optional notes: `\citep[see][p.~4]{key}` — the
+    // first `[…]` is the prenote only when a second one follows.
+    const optionals = (macro.args ?? []).filter((a: any) => a.openMark === '[')
+    let prenote: string | null = null
+    let postnote: string | null = null
+    if (optionals.length >= 2) {
+      prenote = printRaw(optionals[0].content ?? []).trim()
+      postnote = printRaw(optionals[1].content ?? []).trim()
+    } else if (optionals.length === 1) {
+      const text = printRaw(optionals[0].content ?? []).trim()
+      // An empty captured `[]` slot is unified-latex padding, not a note.
+      if (text) postnote = text
+    }
+    return latexSchema.nodes.citation.create({ keys, cmd: name, prenote, postnote })
   }
-  if (
-    name === 'ref' ||
-    name === 'eqref' ||
-    name === 'autoref' ||
-    name === 'cref' ||
-    name === 'Cref' ||
-    name === 'pageref' ||
-    name === 'nameref'
-  ) {
+  if (REF_MACROS.has(name)) {
     const arg = (macro.args ?? []).find((a: any) => a.openMark === '{')
     const raw = printRaw(arg?.content ?? []).trim()
     // \cref/\Cref accept comma-separated key lists.
@@ -1427,18 +1935,30 @@ function macroToInline(
     return latexSchema.nodes.hardBreak.create()
   }
 
-  // Silent layout macros — emit nothing.
-  if (SILENT_MACROS.has(name)) return null
-
-  // Spacing macros (\quad, \,, \;, …) → emit a thin space.
-  if (SPACE_MACROS.has(name)) {
-    return latexSchema.text(name === 'qquad' ? '  ' : ' ')
+  // Silent layout macros. They produce no visible output, but they DO
+  // affect the compiled PDF (`\noindent`, `\small`, …), so they survive
+  // as an invisible rawInline rather than being deleted from the file.
+  if (SILENT_MACROS.has(name)) {
+    return latexSchema.nodes.rawInline.create({ source: `\\${name}`, display: '' })
   }
 
-  // Known typographic / icon macros → Unicode glyph fallback.
+  // Spacing macros (\quad, \,, \;, …) → show a space, keep the macro.
+  // Emitting a plain text space instead collapsed `\quad` into an ordinary
+  // space on the next save.
+  if (SPACE_MACROS.has(name)) {
+    return latexSchema.nodes.rawInline.create({
+      source: rawOf(macro, printRaw),
+      display: name === 'qquad' ? '  ' : ' '
+    })
+  }
+
+  // Known typographic / icon macros → Unicode glyph, source preserved.
   const glyph = ICON_MACRO_GLYPHS[name]
   if (glyph !== undefined) {
-    return latexSchema.text(glyph)
+    return latexSchema.nodes.rawInline.create({
+      source: rawOf(macro, printRaw),
+      display: glyph
+    })
   }
 
   // Unknown inline macro. If it has a `{...}` arg, recurse into the LAST
@@ -1455,7 +1975,13 @@ function macroToInline(
   if (args.length > 0) {
     return inlineNodes(args[args.length - 1].content ?? [], printRaw)
   }
-  return null
+  // A zero-argument macro we know nothing about. Dropping it silently
+  // deleted it from the user's .tex on the next save; keep the source
+  // and show it, so at least the loss is visible and reversible.
+  return latexSchema.nodes.rawInline.create({
+    source: `\\${name}`,
+    display: `\\${name}`
+  })
 }
 
 function trimInline(inline: PMNode[]): PMNode[] {

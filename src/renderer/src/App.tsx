@@ -9,16 +9,13 @@ export default function App(): React.JSX.Element {
   useBuild()
   useShortcuts()
 
-  // Sync the title-bar overlay color with the resolved theme attribute.
+  // Keep the native window background in sync with the resolved theme, so
+  // resizing doesn't reveal a white edge in dark mode. The window buttons
+  // themselves are rendered in-app by WindowControls.
   useEffect(() => {
     const apply = (): void => {
       const dark = document.documentElement.getAttribute('data-theme') === 'dark'
-      window.windowAPI
-        ?.setTitleBarOverlay({
-          color: dark ? '#1a1a1c' : '#ffffff',
-          symbolColor: dark ? '#f2f2f4' : '#111111'
-        })
-        .catch(() => undefined)
+      window.windowAPI?.setChromeColor(dark ? '#1a1a1c' : '#ffffff').catch(() => undefined)
     }
     apply()
     const obs = new MutationObserver(apply)

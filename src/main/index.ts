@@ -14,12 +14,17 @@ let storeManager: PaperStoreManager | null = null
 let mcpServer: McpPaperServer | null = null
 let compiler: LatexCompiler | null = null
 
-let currentTitleBarOverlay: { color: string; symbolColor: string } = {
-  color: '#ffffff',
-  symbolColor: '#111111'
+// Tracks the resolved theme so a window created later starts with the
+// right background instead of flashing white.
+let currentChromeColor = '#ffffff'
+
+function broadcastWindowState(win: BrowserWindow): void {
+  if (win.isDestroyed()) return
+  win.webContents.send('window:state-changed', {
+    maximized: win.isMaximized(),
+    fullScreen: win.isFullScreen()
+  })
 }
-const backgroundColorForOverlay = (): string =>
-  currentTitleBarOverlay.color === '#ffffff' ? '#ffffff' : '#1a1a1c'
 
 // ── Lazy module accessors ────────────────────────────────────────────────
 
@@ -69,9 +74,13 @@ function createWindow(): void {
     show: false,
     title: 'synthetic-corbato',
     autoHideMenuBar: true,
-    backgroundColor: backgroundColorForOverlay(),
-    titleBarStyle: 'hidden',
-    titleBarOverlay: { ...currentTitleBarOverlay, height: 36 },
+    backgroundColor: currentChromeColor,
+    // Frameless with no titleBarOverlay: the minimise / maximise / close
+    // buttons are drawn by the renderer (see WindowControls) so they can
+    // match the app's own styling. macOS keeps its traffic lights, which
+    // sit inset in the top-left.
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
+    trafficLightPosition: process.platform === 'darwin' ? { x: 16, y: 22 } : undefined,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false
@@ -79,6 +88,15 @@ function createWindow(): void {
   })
 
   mainWindow.on('ready-to-show', () => mainWindow?.show())
+
+  // Keep the renderer's maximise/restore glyph in sync with reality —
+  // the window can also be snapped or double-click-maximised by the OS.
+  const win = mainWindow
+  const sync = (): void => broadcastWindowState(win)
+  win.on('maximize', sync)
+  win.on('unmaximize', sync)
+  win.on('enter-full-screen', sync)
+  win.on('leave-full-screen', sync)
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
@@ -124,19 +142,41 @@ app.whenReady().then(async () => {
   })
 
   // ── Window chrome ──
-  ipcMain.handle(
-    'window:setTitleBarOverlay',
-    async (_, overlay: { color: string; symbolColor: string }) => {
-      currentTitleBarOverlay = overlay
-      for (const win of BrowserWindow.getAllWindows()) {
-        try {
-          win.setTitleBarOverlay({ ...overlay, height: 36 })
-        } catch {
-          // Window not constructed with the overlay style — ignore.
-        }
+  // The renderer reports the resolved theme colour so a window opened
+  // later (or a reload) doesn't flash the wrong background.
+  ipcMain.handle('window:setChromeColor', async (_, color: string) => {
+    currentChromeColor = color
+    for (const win of BrowserWindow.getAllWindows()) {
+      try {
+        win.setBackgroundColor(color)
+      } catch {
+        // Not fatal — this is cosmetic.
       }
     }
-  )
+  })
+
+  const windowFor = (e: Electron.IpcMainInvokeEvent): BrowserWindow | null =>
+    BrowserWindow.fromWebContents(e.sender)
+
+  ipcMain.handle('window:minimize', async (e) => windowFor(e)?.minimize())
+
+  ipcMain.handle('window:toggleMaximize', async (e) => {
+    const win = windowFor(e)
+    if (!win) return false
+    if (win.isMaximized()) win.unmaximize()
+    else win.maximize()
+    return win.isMaximized()
+  })
+
+  ipcMain.handle('window:close', async (e) => windowFor(e)?.close())
+
+  ipcMain.handle('window:getState', async (e) => {
+    const win = windowFor(e)
+    return {
+      maximized: win?.isMaximized() ?? false,
+      fullScreen: win?.isFullScreen() ?? false
+    }
+  })
 
   // ── Paper library / IO ──
   ipcMain.handle('paper:list', async () => storeManager!.listPapers())

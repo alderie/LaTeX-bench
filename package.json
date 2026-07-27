@@ -22,7 +22,8 @@
     "build:win": "npm run build && electron-builder --win",
     "build:mac": "electron-vite build && electron-builder --mac",
     "build:linux": "electron-vite build && electron-builder --linux",
-    "fidelity": "node --import tsx scripts/fidelity.mjs"
+    "fidelity": "node --import tsx scripts/fidelity.mjs",
+    "check:zoom": "node scripts/check-zoom-anchor.mjs"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.18.4",

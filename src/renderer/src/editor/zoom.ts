@@ -14,6 +14,13 @@
 //   commitZoom  — the store write and `localStorage` persistence, which the
 //                 caller debounces to the end of the gesture.
 
+import {
+  captureAnchor,
+  findScrollContainer,
+  restoreAnchor,
+  type AnchorPoint
+} from './zoom-anchor'
+
 export const MIN_ZOOM = 0.5
 export const MAX_ZOOM = 2.5
 
@@ -56,6 +63,7 @@ export function persistZoom(zoom: number): void {
 // ── Visual application ─────────────────────────────────────────────────
 
 let pendingZoom: number | null = null
+let pendingAnchor: AnchorPoint | null = null
 // A boolean rather than the rAF handle: the handle is only assigned *after*
 // `requestAnimationFrame` returns, so a callback that runs synchronously
 // (some test environments, and rAF-throttling shims) would see the stale
@@ -67,9 +75,17 @@ let appliedZoom = DEFAULT_ZOOM
  * Set the zoom variable, coalescing to one DOM write per animation frame.
  * Repeated calls within a frame keep only the newest value, so a burst of
  * wheel events costs exactly one relayout.
+ *
+ * `anchor` is the point the zoom should pivot around — the pointer for a
+ * wheel gesture. Without it the document slides out from under the reader,
+ * increasingly so the further down the paper they are. Omit it and the
+ * pivot falls back to the caret, or the middle of the viewport.
  */
-export function applyZoom(zoom: number): void {
+export function applyZoom(zoom: number, anchor?: AnchorPoint | null): void {
   const next = quantizeZoom(zoom)
+  // The newest anchor wins: during a gesture the pointer may have moved,
+  // and the pivot the reader perceives is where it is now.
+  if (anchor !== undefined) pendingAnchor = anchor
   if (next === appliedZoom && pendingZoom === null) return
   pendingZoom = next
   if (framePending) return
@@ -77,10 +93,21 @@ export function applyZoom(zoom: number): void {
   requestAnimationFrame(() => {
     framePending = false
     const value = pendingZoom
+    const anchorPoint = pendingAnchor
     pendingZoom = null
+    pendingAnchor = null
     if (value === null || value === appliedZoom) return
+
+    // Capture first — this reads the DOM as it stands *before* the zoom.
+    const container = findScrollContainer()
+    const captured = container ? captureAnchor(container, anchorPoint) : null
+
     appliedZoom = value
     document.documentElement.style.setProperty('--paper-zoom', String(value))
+
+    // …and correct the scroll position from the geometry that resulted.
+    // The rect read here forces the layout the browser had to do anyway.
+    restoreAnchor(captured)
   })
 }
 
@@ -96,6 +123,7 @@ export function currentZoom(): number {
  */
 export function applyZoomNow(zoom: number): void {
   pendingZoom = null
+  pendingAnchor = null
   appliedZoom = quantizeZoom(zoom)
   document.documentElement.style.setProperty('--paper-zoom', String(appliedZoom))
 }

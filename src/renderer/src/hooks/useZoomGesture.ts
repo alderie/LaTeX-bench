@@ -15,6 +15,9 @@ import { applyZoom, clampZoom, currentZoom, MAX_ZOOM, MIN_ZOOM } from '../editor
 //  3. The zustand store — and therefore any component that re-renders on
 //     zoom — is updated once, after the gesture stops.
 //
+// The gesture pivots on the pointer (see zoom-anchor), so the text under the
+// cursor stays put instead of the page sliding away underneath it.
+//
 // Attached to the window rather than the editor element so the gesture works
 // over the whole paper surface including its margins.
 
@@ -65,7 +68,9 @@ export function useZoomGesture(): void {
       ) {
         return
       }
-      applyZoom(next)
+      // Pivot on the pointer: zooming should magnify what the reader is
+      // looking at, not slide the document past them.
+      applyZoom(next, { clientX: event.clientX, clientY: event.clientY })
 
       if (commitTimer !== null) clearTimeout(commitTimer)
       commitTimer = setTimeout(commit, COMMIT_DELAY_MS)

@@ -6,6 +6,7 @@ import { isStructuralSource, renderStructural } from '../renderers/structural'
 import { SourceBlockEditor } from '../editors/source-block-editor'
 import { TabularEditor } from '../editors/tabular-editor'
 import { CELL_ATTRIBUTE } from '../editors/cell-editor'
+import { settle } from './settle'
 
 // A block the parser kept as source. Three of those turn out to be things we
 // can draw — a table, an algorithm, a `\appendix` rule — and the rest are
@@ -22,6 +23,8 @@ class RawLatexView implements NodeView {
   dom: HTMLElement
   private editing = false
   private editor: TabularEditor | SourceBlockEditor | null = null
+  /** The next render is the one that follows an edit, so it arrives. */
+  private settling = false
 
   constructor(
     private node: PMNode,
@@ -52,6 +55,10 @@ class RawLatexView implements NodeView {
   private render(): void {
     this.dom.replaceChildren()
     this.dom.classList.remove('raw-latex-block--rich', 'raw-latex-block--editing')
+    if (this.settling) {
+      this.settling = false
+      settle(this.dom)
+    }
     const source = (this.node.attrs.source as string) || ''
     if (!source) {
       this.dom.textContent = '% (empty raw block)'
@@ -113,6 +120,7 @@ class RawLatexView implements NodeView {
   /** Leave editing mode, writing `source` back when it changed. */
   private closeEditor(source: string | null): void {
     this.editing = false
+    this.settling = true
     this.editor?.destroy()
     this.editor = null
     this.dom.classList.remove('raw-latex-block--editing')

@@ -1080,6 +1080,70 @@
 .block-editor {
   overflow: visible;
 }
+
+/* ── Opening and closing ─────────────────────────────────────────────
+   A formula and its editor replace each other in place, and doing that in
+   one frame reads as a flicker — the eye has nothing to follow, so a click
+   on a formula looks like the page jumped rather than like the formula
+   opened. Both directions get the same short entrance: the panel arrives
+   when it opens, and the typeset formula arrives when it closes.
+
+   Translation only, never scale. The cell field over a matrix entry is
+   positioned from the difference between two rects measured inside this
+   element, and a translate leaves that difference alone — a scale would
+   move the field a pixel or two as the animation settled. */
+@keyframes block-editor-open {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.block-editor {
+  animation: block-editor-open 130ms cubic-bezier(0.2, 0, 0.2, 1);
+}
+/* An inline formula is a chip on the prose baseline; moving it would nudge
+   the line it sits in, so it only fades. */
+@keyframes block-editor-open-inline {
+  from {
+    opacity: 0.35;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.block-editor--inline {
+  animation: block-editor-open-inline 130ms ease-out;
+}
+/* The other half: a block that has just stopped being an editor. Added by
+   the node view for one animation, so renumbering an equation or any other
+   re-render doesn't flash. */
+@keyframes block-settle {
+  from {
+    opacity: 0.35;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.block-settling {
+  animation: block-settle 140ms ease-out;
+}
+.math-inline.block-settling {
+  animation-name: block-editor-open-inline;
+}
+@media (prefers-reduced-motion: reduce) {
+  .block-editor,
+  .block-editor--inline,
+  .block-settling {
+    animation: none;
+  }
+}
 .block-editor__spacer {
   flex: 1;
 }
@@ -1897,6 +1961,13 @@ td.source-cell--editing:hover {
   font-family: var(--font-mono);
   font-size: 0.92em;
   line-height: 1.5;
+  /* Pinned, not inherited. The two layers only line up while they agree on
+     everything that decides where a glyph lands, and `text-align` is
+     inherited by the `<pre>` but not by the `<input>` — so a field dropped
+     into a centred context (a cell over a matrix, a `<td>` in a results
+     table) painted its text centred while the caret and the selection stayed
+     at the left. */
+  text-align: left;
 }
 .code-field__highlight,
 .code-field__input {

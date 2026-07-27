@@ -5,6 +5,7 @@ import type { EditorView, NodeView, NodeViewConstructor } from 'prosemirror-view
 import { getEquationNumbersForPos, subscribe as subscribeRegistry } from '../labelRegistry'
 import { getMathMacros, injectEquationTags, stripMathWrappers } from '../math-macros'
 import { FormulaEditor } from '../editors/formula-editor'
+import { settle } from './settle'
 
 // Re-exported for the editor, which sets the table when a paper loads.
 export { setMathMacros, getMathMacros } from '../math-macros'
@@ -15,6 +16,8 @@ class MathView implements NodeView {
   private editing = false
   private editor: FormulaEditor | null = null
   private unsubscribe: (() => void) | null = null
+  /** The next render is the one that follows an edit, so it arrives. */
+  private settling = false
 
   constructor(
     private node: PMNode,
@@ -89,6 +92,10 @@ class MathView implements NodeView {
     }
     // After KaTeX, which owns the element's children.
     if (labels.length > 0) this.dom.appendChild(buildLabelChip(labels))
+    if (this.settling) {
+      this.settling = false
+      settle(this.dom)
+    }
   }
 
   private openEditor(): void {
@@ -124,6 +131,7 @@ class MathView implements NodeView {
   /** Leave editing mode, writing `latex` back to the node when it changed. */
   private closeEditor(latex: string | null): void {
     this.editing = false
+    this.settling = true
     this.editor?.destroy()
     this.editor = null
     this.dom.classList.remove('math-block--editing', 'math-inline--editing')

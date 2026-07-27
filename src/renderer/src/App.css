@@ -1820,9 +1820,13 @@
   border-left-color: var(--text-tertiary);
   background: transparent;
 }
-.wysiwyg-editor .ProseMirror aside[data-theorem]::before {
-  content: attr(data-kind);
-  display: block;
+/* The header is a real element rather than a `::before`, so the kind and
+   the title can be clicked and changed in place. */
+.wysiwyg-editor .ProseMirror .theorem-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35em;
+  flex-wrap: wrap;
   font-family: var(--font-sans);
   font-size: 0.75em;
   font-weight: 700;
@@ -1830,25 +1834,92 @@
   letter-spacing: 0.05em;
   color: var(--text-primary);
   margin-bottom: 0.4em;
+  user-select: none;
 }
-/* When the registry has assigned this theorem a number, surface it
-   inline with the kind label: "Theorem 3.1". */
-.wysiwyg-editor .ProseMirror aside[data-theorem][data-number]::before {
-  content: attr(data-kind) ' ' attr(data-number);
+.wysiwyg-editor .ProseMirror .theorem-head__kind {
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  padding: 0 1px;
+  margin: 0 -1px;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
 }
-.wysiwyg-editor .ProseMirror aside[data-theorem][data-title]::before {
-  content: attr(data-kind) ' (' attr(data-title) ')';
+.wysiwyg-editor .ProseMirror .theorem-head__kind:hover,
+.wysiwyg-editor .ProseMirror .theorem-head__kind:focus-visible {
+  background: var(--overlay-hover);
+  border-color: var(--border-color);
+  outline: none;
 }
-.wysiwyg-editor .ProseMirror aside[data-theorem][data-number][data-title]::before {
-  content: attr(data-kind) ' ' attr(data-number) ' (' attr(data-title) ')';
+.wysiwyg-editor .ProseMirror .theorem-head__number:empty { display: none; }
+.wysiwyg-editor .ProseMirror .theorem-head__title,
+.wysiwyg-editor .ProseMirror .theorem-head__add {
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  padding: 0 3px;
+  margin: 0 -3px;
+  cursor: text;
 }
-.wysiwyg-editor .ProseMirror aside[data-theorem] > p:first-of-type { margin-top: 0; }
-.wysiwyg-editor .ProseMirror aside[data-theorem] > p:last-of-type { margin-bottom: 0; }
-.wysiwyg-editor .ProseMirror aside[data-theorem][data-kind='proof'] > p:last-of-type::after {
+.wysiwyg-editor .ProseMirror .theorem-head__title {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+.wysiwyg-editor .ProseMirror .theorem-head__title:hover,
+.wysiwyg-editor .ProseMirror .theorem-head__title:focus-visible {
+  background: var(--overlay-hover);
+  border-color: var(--border-color);
+  outline: none;
+}
+/* Most theorems have no title, and a permanent "+ name" on every one of
+   them would be noise. It appears when the pointer is over the theorem, or
+   whenever it is keyboard-focused. */
+.wysiwyg-editor .ProseMirror .theorem-head__add {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--text-tertiary);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.wysiwyg-editor .ProseMirror aside[data-theorem]:hover .theorem-head__add,
+.wysiwyg-editor .ProseMirror .theorem-head__add:focus-visible {
+  opacity: 1;
+  outline: none;
+}
+.wysiwyg-editor .ProseMirror .theorem-head__add:hover {
+  color: var(--text-secondary);
+  background: var(--overlay-hover);
+}
+.wysiwyg-editor .ProseMirror .theorem-head__input {
+  font: inherit;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  border: 1px solid var(--accent-color, var(--border-color));
+  border-radius: 3px;
+  padding: 0 4px;
+  min-width: 8ch;
+  width: 18ch;
+  outline: none;
+}
+.wysiwyg-editor .ProseMirror .theorem-body > p:first-of-type { margin-top: 0; }
+.wysiwyg-editor .ProseMirror .theorem-body > p:last-of-type { margin-bottom: 0; }
+.wysiwyg-editor .ProseMirror aside[data-theorem][data-kind='proof'] .theorem-body > p:last-of-type::after {
   content: ' \220E';
   margin-left: 0.5em;
   color: var(--text-tertiary);
 }
+
 
 /* ── Bibliography ─────────────────────────────────────────────────── */
 

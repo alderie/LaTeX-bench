@@ -104,6 +104,13 @@ class CodeBlockView implements NodeView {
     })
   }
 
+  // Selecting the node counts as asking to edit it — that's what lets the
+  // slash menu drop the caret straight into a freshly inserted code block
+  // instead of leaving it parked next to one.
+  selectNode(): void {
+    if (!this.editing) this.openEditor()
+  }
+
   stopEvent(): boolean {
     return this.editing
   }

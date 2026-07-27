@@ -464,6 +464,11 @@ const nodes: { [name: string]: NodeSpec } = {
     parseDOM: [
       {
         tag: 'aside[data-theorem]',
+        // The node view puts a chrome header (kind picker, title) above the
+        // body, so re-reading the live DOM has to know where the prose
+        // starts. `toDOM` below has no such wrapper, hence the fallback.
+        contentElement: (dom) =>
+          (dom as HTMLElement).querySelector('[data-theorem-body]') ?? (dom as HTMLElement),
         getAttrs: (dom) => {
           const el = dom as HTMLElement
           return {

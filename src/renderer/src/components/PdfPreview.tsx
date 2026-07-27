@@ -19,6 +19,33 @@ import { usePaperStore } from '../stores/paperStore'
 /** Zoom stops, in the order the +/- buttons walk them. */
 const ZOOM_STOPS = [0.5, 0.65, 0.8, 1, 1.25, 1.5, 2, 3]
 
+/** The wheel gesture is continuous, so it needs bounds rather than stops. */
+const MIN_PDF_ZOOM = 0.25
+const MAX_PDF_ZOOM = 6
+/** How much of a wheel notch is one doubling. Matches the paper's gesture. */
+const WHEEL_SENSITIVITY = 0.0015
+/** How long the wheel has to stop before the pages are re-rasterised. */
+const RERENDER_DELAY_MS = 160
+
+/**
+ * Resize every rendered page to `zoom`, in CSS only.
+ *
+ * The canvas keeps whatever pixels it was rasterised with; this just scales
+ * the box they're painted into, which the compositor does for free. Both
+ * dimensions come from the page's own size at scale 1, so the ratio is
+ * exactly the PDF's however far the zoom has drifted from the last render.
+ */
+function applyCssZoom(host: HTMLElement | null, zoom: number): void {
+  if (!host) return
+  for (const canvas of Array.from(host.querySelectorAll('canvas'))) {
+    const baseWidth = Number(canvas.dataset.baseWidth)
+    const baseHeight = Number(canvas.dataset.baseHeight)
+    if (!baseWidth || !baseHeight) continue
+    canvas.style.width = `${Math.round(baseWidth * zoom)}px`
+    canvas.style.height = `${Math.round(baseHeight * zoom)}px`
+  }
+}
+
 type Status = 'empty' | 'loading' | 'ready' | 'error'
 
 interface Loaded {
@@ -97,6 +124,8 @@ export function PdfPreview(): React.JSX.Element {
 
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const pagesRef = useRef<HTMLDivElement | null>(null)
+  // The live zoom during a wheel gesture, which runs ahead of React.
+  const zoomRef = useRef(1)
 
   // ── Load ────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -188,8 +217,17 @@ export function PdfPreview(): React.JSX.Element {
         canvas.height = Math.floor(viewport.height * ratio)
         canvas.style.width = `${Math.floor(viewport.width)}px`
         canvas.style.height = `${Math.floor(viewport.height)}px`
+        // The page's shape at scale 1, so the wheel gesture can resize the
+        // canvas between rasterisations without recomputing a viewport —
+        // and, critically, can set *both* dimensions together. Setting only
+        // one and letting CSS decide the other is what squashes the page.
+        canvas.dataset.baseWidth = String(unscaled.width)
+        canvas.dataset.baseHeight = String(unscaled.height)
         wrapper.appendChild(canvas)
         host.appendChild(wrapper)
+        // What is actually on screen, which in fit-width is a number nobody
+        // chose. A wheel gesture and the +/- buttons both start from here.
+        if (n === 1) zoomRef.current = scale
 
         const context = canvas.getContext('2d')
         if (!context) continue
@@ -266,16 +304,84 @@ export function PdfPreview(): React.JSX.Element {
   }, [])
 
   const stepZoom = (direction: 1 | -1): void => {
+    // From what is on screen, not from the last value a button set: after a
+    // wheel gesture or in fit-width those are different numbers, and
+    // stepping from the stale one makes the first click jump.
+    const current = zoomRef.current
+    const index = ZOOM_STOPS.findIndex((stop) => stop > current + 0.001)
+    const next =
+      direction === 1
+        ? (ZOOM_STOPS[index] ?? ZOOM_STOPS[ZOOM_STOPS.length - 1])
+        : ([...ZOOM_STOPS].reverse().find((stop) => stop < current - 0.001) ?? ZOOM_STOPS[0])
+    zoomRef.current = next
     setFitWidth(false)
-    setZoom((current) => {
-      const index = ZOOM_STOPS.findIndex((s) => s >= current - 0.001)
-      const next = Math.min(
-        ZOOM_STOPS.length - 1,
-        Math.max(0, (index < 0 ? ZOOM_STOPS.length - 1 : index) + direction)
-      )
-      return ZOOM_STOPS[next]
-    })
+    setZoom(next)
   }
+
+  // ── Ctrl/Cmd + wheel, over the PDF only ─────────────────────────────
+  //
+  // The app already zooms the *paper* on Ctrl+wheel, from a listener on
+  // `window`. Over this pane that is the wrong document to zoom, so the
+  // gesture is claimed here and stopped before it bubbles up to that one.
+  //
+  // Between rasterisations the canvases are resized in CSS, which is
+  // instant and keeps the gesture at pointer speed; a re-render at the new
+  // scale follows once the wheel stops, which is what makes it sharp again.
+  // Both canvas dimensions are always written together — setting width and
+  // letting `max-width` decide the height is exactly what squashed the page.
+  useEffect(() => {
+    const scroller = scrollRef.current
+    if (!scroller) return undefined
+
+    let settle: ReturnType<typeof setTimeout> | null = null
+
+    const onWheel = (event: WheelEvent): void => {
+      if (!event.ctrlKey && !event.metaKey) return
+      // Ours, not the paper's and not Chromium's.
+      event.preventDefault()
+      event.stopPropagation()
+
+      const delta =
+        event.deltaMode === 1
+          ? event.deltaY * 16
+          : event.deltaMode === 2
+            ? event.deltaY * 400
+            : event.deltaY
+      if (delta === 0) return
+
+      const previous = zoomRef.current
+      // Multiplicative, so a notch feels the same size at 50% as at 300%.
+      const next = Math.min(
+        MAX_PDF_ZOOM,
+        Math.max(MIN_PDF_ZOOM, previous * Math.exp(-delta * WHEEL_SENSITIVITY))
+      )
+      if (next === previous) return
+      zoomRef.current = next
+
+      // Keep the point under the cursor under the cursor.
+      const rect = scroller.getBoundingClientRect()
+      const anchorX = scroller.scrollLeft + (event.clientX - rect.left)
+      const anchorY = scroller.scrollTop + (event.clientY - rect.top)
+      const growth = next / previous
+
+      applyCssZoom(pagesRef.current, next)
+      scroller.scrollLeft = anchorX * growth - (event.clientX - rect.left)
+      scroller.scrollTop = anchorY * growth - (event.clientY - rect.top)
+
+      if (settle) clearTimeout(settle)
+      settle = setTimeout(() => {
+        settle = null
+        setFitWidth(false)
+        setZoom(zoomRef.current)
+      }, RERENDER_DELAY_MS)
+    }
+
+    scroller.addEventListener('wheel', onWheel, { passive: false })
+    return () => {
+      scroller.removeEventListener('wheel', onWheel)
+      if (settle) clearTimeout(settle)
+    }
+  }, [])
 
   return (
     <div className="pdf-preview">

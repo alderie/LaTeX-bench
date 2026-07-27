@@ -2,10 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { parseLatexToDoc } from '@renderer/editor/wysiwyg/latex-to-doc'
 import { serializeDocToLatex } from '@renderer/editor/wysiwyg/doc-to-latex'
 import { isTabularSource, renderTabular } from '@renderer/editor/wysiwyg/renderers/tabular'
-import {
-  isStructuralSource,
-  renderStructural
-} from '@renderer/editor/wysiwyg/renderers/structural'
+import { isStructuralSource, renderStructural } from '@renderer/editor/wysiwyg/renderers/structural'
 import * as labelRegistry from '@renderer/editor/wysiwyg/labelRegistry'
 import { allOfType, fixture, flatText } from './helpers'
 
@@ -35,22 +32,36 @@ describe('opening a file damaged by an earlier version', () => {
     expect(labelRegistry.getCitation('howard2021time')).toBeDefined()
   })
 
-  it('still renders a tabular whose column spec was deleted', async () => {
+  it('gives a tabular back the column spec that was deleted', async () => {
+    // This used to be preserved as-is and merely *rendered* around. It
+    // isn't a cosmetic problem: `\begin{tabular}` with no argument makes
+    // LaTeX read `\toprule` as the column spec and abort the run with "Use
+    // of \@array doesn't match its definition" — and the aborted run leaves
+    // the .aux incomplete, so every \cite and \ref reports undefined as
+    // well. The document round trips unchanged, so it comes back on every
+    // build until something puts the spec back.
     const { doc } = await parseLatexToDoc(fixture('damaged-heavy-tail.tex'))
     const raw = allOfType(doc, 'rawLatex')
       .map((n) => n.attrs.source as string)
       .find((s) => s.includes('\\begin{tabular}'))
     expect(raw).toBeDefined()
-    // `\begin{tabular}` with no `{…}` argument at all — malformed LaTeX.
-    expect(raw).toMatch(/\\begin\{tabular\}\s*\\toprule/)
-    expect(isTabularSource(raw!)).toBe(true)
+    expect(raw).toMatch(/\\begin\{tabular\}\{lccc\}/)
 
     const table = renderTabular(raw!).querySelector('table')!
     const rows = Array.from(table.querySelectorAll('tr'))
     expect(rows.length).toBeGreaterThan(2)
-    // The column count comes from the rows, since the spec is gone.
     expect(rows[1].querySelectorAll('td').length).toBe(4)
     expect(rows[1].textContent).toContain('Method')
+  })
+
+  it('still renders a spec-less tabular handed to it directly', async () => {
+    // The renderer's own tolerance stays: the repair runs on parse, and a
+    // table can reach the renderer from an editor buffer that hasn't been
+    // through one.
+    const spec_less = '\\begin{tabular}\\toprule\nA & B & C \\\\\n\\bottomrule\n\\end{tabular}'
+    expect(isTabularSource(spec_less)).toBe(true)
+    const table = renderTabular(spec_less).querySelector('table')!
+    expect(table.querySelectorAll('tr').length).toBeGreaterThan(0)
   })
 
   it('does not introduce new damage when re-saved', async () => {

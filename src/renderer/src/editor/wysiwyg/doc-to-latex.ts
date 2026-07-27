@@ -1,6 +1,11 @@
 import { Node as PMNode, Mark } from 'prosemirror-model'
 import { encodeTextSymbols } from './text-symbols'
 
+/** Headings whose body continues on the same line as the heading. */
+function isRunIn(macro: string): boolean {
+  return macro === 'paragraph' || macro === 'subparagraph'
+}
+
 const SECTION_MACRO_BY_LEVEL: Record<number, string> = {
   1: 'section',
   2: 'subsection',
@@ -26,9 +31,7 @@ export function serializeDocToLatex(doc: PMNode): string {
     }
   })
 
-  const body = serializeBlockSeq(
-    childrenOf(doc).filter((child) => child.type.name !== 'preamble')
-  )
+  const body = serializeBlockSeq(childrenOf(doc).filter((child) => child.type.name !== 'preamble'))
 
   // An `\input`ed section file is body text and nothing else. Wrapping it in
   // `\begin{document}` — which is what this did unconditionally — would make
@@ -205,8 +208,16 @@ function serializeBlock(node: PMNode): string {
       const inline = title && title.type.name === 'sectionTitle' ? serializeInline(title) : ''
       out += `\n\\${macro}${star}{${inline}}`
       for (const lbl of labels) out += `\\label{${lbl}}`
-      out += '\n'
       const body = serializeBlockSeq(childrenOf(node, true))
+      // `\paragraph` and `\subparagraph` are run-in headings: the text that
+      // follows continues the same paragraph, on the same line. A blank
+      // line after them ends it, which leaves the heading stranded on a
+      // line of its own and indents the prose as a new paragraph — a
+      // visible change to the document, written on every save.
+      if (isRunIn(macro) && body) {
+        return out + ' ' + body.replace(/^\n+/, '') + '\n'
+      }
+      out += '\n'
       if (body) out += `\n${body}\n`
       return out
     }

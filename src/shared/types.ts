@@ -46,12 +46,27 @@ export interface BuildError {
   severity: 'error' | 'warning'
 }
 
+/**
+ * A package the compile stopped for, and the file that gave it away.
+ *
+ * Carried on the build result so the build panel can offer to install it
+ * rather than leaving "File `mathtools.sty' not found" as the last word.
+ */
+export interface MissingPackage {
+  /** The file TeX could not find, e.g. `mathtools.sty`. */
+  file: string
+  /** The TeX Live package that provides it, e.g. `mathtools`. */
+  name: string
+}
+
 export interface BuildResult {
   success: boolean
   paperId: string
   pdfPath: string | null
   log: string
   errors: BuildError[]
+  /** Empty unless the build died for want of a package we can fetch. */
+  missingPackages: MissingPackage[]
   durationMs: number
 }
 
@@ -195,6 +210,8 @@ export interface TexAPI {
   cancel: () => Promise<TexInstallState>
   /** Delete the managed installation. */
   remove: () => Promise<TexInstallState>
+  /** Add packages to the existing installation, e.g. one a build asked for. */
+  installPackages: (names: string[]) => Promise<TexInstallState>
   /** Reveal the managed directory in the OS file manager. */
   reveal: () => Promise<void>
   onProgress: (cb: (progress: TexInstallProgress) => void) => () => void

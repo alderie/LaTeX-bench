@@ -15,6 +15,7 @@ interface TexState extends TexInstallState {
   loaded: boolean
   refresh: () => Promise<void>
   install: () => Promise<void>
+  installPackages: (names: string[]) => Promise<void>
   cancel: () => Promise<void>
   remove: () => Promise<void>
   reveal: () => Promise<void>
@@ -41,6 +42,15 @@ export const useTexStore = create<TexState>()((set) => ({
     // first mirror has answered.
     set({ installing: true, progress: { phase: 'download', percent: 0, message: 'Starting…' } })
     const state = await window.texAPI.install()
+    set({ ...state, loaded: true })
+  },
+
+  installPackages: async (names: string[]) => {
+    set({
+      installing: true,
+      progress: { phase: 'packages', percent: 75, message: `Installing ${names.join(', ')}…` }
+    })
+    const state = await window.texAPI.installPackages(names)
     set({ ...state, loaded: true })
   },
 

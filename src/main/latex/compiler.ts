@@ -6,6 +6,7 @@ import type { BrowserWindow } from 'electron'
 import type { BuildError, BuildResult, PaperSettings } from '../../shared/types'
 import type { PaperStoreManager } from '../store'
 import { parseLatexLog } from './log-parser'
+import { missingPackagesFromLog } from './tex-packages'
 import { managedExecutable, texEnv } from './managed-tex'
 
 // Spawns user-installed pdflatex / xelatex / latexmk. Streams progress lines
@@ -92,6 +93,8 @@ export class LatexCompiler {
               severity: 'error'
             }
           ],
+          // Nothing ran, so nothing can be missing yet — the engine itself is.
+          missingPackages: [],
           durationMs: Date.now() - start
         }
         try {
@@ -155,6 +158,9 @@ export class LatexCompiler {
           pdfPath: success ? finalPdf : null,
           log: logText,
           errors,
+          // Only when the build failed: a successful run can still mention a
+          // file it didn't find on a first pass and then resolved.
+          missingPackages: success ? [] : missingPackagesFromLog(logText),
           durationMs: Date.now() - start
         }
         try {

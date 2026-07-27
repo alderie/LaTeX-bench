@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { useEffect, useState } from 'react'
-import { CheckCircle2, Download, FolderOpen, Loader2, Trash2, X } from 'lucide-react'
+import { CheckCircle2, Download, FolderOpen, Loader2, Package, Trash2, X } from 'lucide-react'
 import { useTexStore } from '../stores/texStore'
 import { usePaperStore } from '../stores/paperStore'
 
@@ -54,7 +54,12 @@ export function TexInstallCard(): React.JSX.Element | null {
       <div className="tex-install tex-install--busy">
         <div className="tex-install__row">
           <Loader2 size={14} strokeWidth={2.5} className="tex-install__spin" />
-          <span className="tex-install__title">Installing TeX Live</span>
+          {/* Adding one package to a working tree and downloading the whole
+              distribution are the same phase machinery and very different
+              waits — say which one this is. */}
+          <span className="tex-install__title">
+            {installed ? 'Adding packages' : 'Installing TeX Live'}
+          </span>
           <span className="tex-install__percent">{progress.percent}%</span>
           <button className="tex-install__ghost" onClick={() => void cancel()} title="Cancel">
             <X size={13} strokeWidth={2.5} />
@@ -138,6 +143,65 @@ export function TexInstallCard(): React.JSX.Element | null {
       <p className="tex-install__detail">
         {progress.error ??
           'Installs into a folder this app owns — no administrator rights, nothing added to your PATH, and removable in one click.'}
+      </p>
+    </div>
+  )
+}
+
+/**
+ * The build stopped for a package we can go and get.
+ *
+ * The install manifest is a fixed guess about what papers load, so a document
+ * that reaches past it hits `File 'mathtools.sty' not found` and a fatal
+ * error — an answer that is both correct and useless, since the fix is one
+ * `tlmgr install` the app is perfectly able to run itself. This makes the
+ * missing package a button, and rebuilds afterwards so the click finishes the
+ * job rather than handing back a stale failure.
+ *
+ * Only shown for the managed installation. On a TeX the user installed
+ * themselves, adding packages to their tree is not ours to do.
+ */
+export function MissingPackagesCard(): React.JSX.Element | null {
+  const missing = usePaperStore((s) => s.build.missingPackages)
+  const paperId = usePaperStore((s) => s.paperId)
+  const setBuildState = usePaperStore((s) => s.setBuildState)
+  const installed = useTexStore((s) => s.installed)
+  const installing = useTexStore((s) => s.installing)
+  const installPackages = useTexStore((s) => s.installPackages)
+
+  // While the shared install card is showing a progress bar, a second card
+  // saying the same thing is noise.
+  if (installing || !installed || missing.length === 0) return null
+
+  const names = missing.map((m) => m.name)
+
+  const go = async (): Promise<void> => {
+    await installPackages(names)
+    if (!paperId) return
+    // TeX stops at the first missing file, so this may surface the next one —
+    // which is the point: each round is one click and it converges.
+    setBuildState({ state: 'running', errors: [], missingPackages: [], log: '' })
+    await window.latexAPI.build(paperId).catch((err: Error) => {
+      setBuildState({ state: 'error', errors: [{ message: err.message, severity: 'error' }] })
+    })
+  }
+
+  return (
+    <div className="tex-install tex-install--missing">
+      <div className="tex-install__row">
+        <Package size={14} strokeWidth={2.5} />
+        <span className="tex-install__title">
+          {names.length === 1 ? `Missing package: ${names[0]}` : `${names.length} missing packages`}
+        </span>
+        <span className="tex-install__spacer" />
+        <button className="tex-install__action" onClick={() => void go()}>
+          {names.length === 1 ? 'Install it' : 'Install them'}
+        </button>
+      </div>
+      <p className="tex-install__detail">
+        This paper loads {missing.map((m) => m.file).join(', ')}, which the app&apos;s TeX
+        installation doesn&apos;t have. Installing {names.join(', ')} takes a few seconds and the
+        paper is rebuilt afterwards.
       </p>
     </div>
   )

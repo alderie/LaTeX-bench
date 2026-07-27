@@ -966,6 +966,11 @@ body.is-resizing-preview {
 .tex-install--busy {
   border-color: color-mix(in srgb, var(--editor-cursor) 40%, var(--border-color));
 }
+/* A build that stopped for a fetchable package is a warning, not a failure —
+   the fix is in the card itself. */
+.tex-install--missing {
+  border-color: color-mix(in srgb, var(--status-warn) 45%, var(--border-color));
+}
 
 .tex-install__row {
   display: flex;

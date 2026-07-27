@@ -9,6 +9,7 @@ import type { BrowserWindow } from 'electron'
 import type { TexInstallProgress, TexInstallState } from '../../shared/types'
 import { managedBinDir, managedTexDir, managedTexSize, managedTexVersion } from './managed-tex'
 import { phaseProgress, progressFromLine } from './tex-progress'
+import { EXTRA_PACKAGES } from './tex-packages'
 import {
   bundledPerlPath,
   extractSpec,
@@ -47,46 +48,6 @@ const REPOSITORIES = [
   'https://ftp.tu-chemnitz.de/pub/tex/systems/texlive/tlnet',
   'https://mirrors.rit.edu/CTAN/systems/texlive/tlnet',
   'https://ctan.math.illinois.edu/systems/texlive/tlnet'
-]
-
-/**
- * What gets installed beyond the base scheme.
- *
- * `scheme-basic` is LaTeX and nothing else, which compiles almost no real
- * paper. This is the set a paper in this editor actually reaches for: the
- * default engine, the packages the starter document loads, and the ones
- * every template in the wild assumes are present. Roughly 250MB installed —
- * a fraction of a full TeX Live, and enough that the first compile works.
- */
-const EXTRA_PACKAGES = [
-  'latexmk',
-  'hyperref',
-  'amsfonts',
-  'booktabs',
-  'caption',
-  'natbib',
-  'microtype',
-  'xcolor',
-  'geometry',
-  'enumitem',
-  // No `subcaption` — it ships inside `caption`, and asking tlmgr for it by
-  // name fails the whole install step.
-  'float',
-  'wrapfig',
-  'listings',
-  'algorithms',
-  'algorithmicx',
-  'cleveref',
-  'multirow',
-  'ulem',
-  'setspace',
-  'titlesec',
-  'lipsum',
-  // The modern bibliography stack. The editor reads `references.bib` and
-  // completes from it, so the tools that consume one belong in the base
-  // install rather than being a thing you discover you're missing.
-  'biblatex',
-  'biber'
 ]
 
 /**
@@ -323,10 +284,8 @@ export class TexInstaller {
   }
 
   private async installPackages(texDir: string, repository: string): Promise<void> {
-    // On Windows this is `tlmgr.bat`, which Node will not spawn directly —
-    // `spawnSpec` routes it through the command interpreter.
-    const tlmgr = join(managedBinDir(this.rootDir) ?? '', tlmgrName(process.platform))
-    if (!existsSync(tlmgr)) throw new Error('tlmgr is missing from the new installation.')
+    const tlmgr = this.tlmgrPath()
+    if (!tlmgr) throw new Error('tlmgr is missing from the new installation.')
 
     this.emit(phaseProgress('packages', 'Adding the packages a paper needs…'))
     await this.runSpec(
@@ -334,14 +293,75 @@ export class TexInstaller {
       texDir,
       () => undefined
     )
-    await this.runSpec(
-      spawnSpec(tlmgr, ['install', ...EXTRA_PACKAGES], process.platform),
-      texDir,
-      (line) => {
-        const update = progressFromLine('packages', line)
-        if (update) this.emit(update)
-      }
-    )
+    await this.runTlmgrInstall(tlmgr, texDir, EXTRA_PACKAGES)
+  }
+
+  /**
+   * Add packages to an installation that already exists.
+   *
+   * `EXTRA_PACKAGES` is a guess about what a paper will load, and no guess
+   * covers everyone — the alternative to this is telling someone whose
+   * document wants one package we didn't predict to delete a 250MB tree and
+   * download it again. The repository is whatever the install recorded
+   * (`instopt_adjustrepo`), so nothing needs re-pointing here.
+   */
+  async addPackages(names: string[]): Promise<TexInstallState> {
+    if (this.installing || names.length === 0) return this.getState(false)
+
+    const tlmgr = this.tlmgrPath()
+    if (!tlmgr) {
+      this.emit({
+        phase: 'failed',
+        percent: 0,
+        message: 'No managed installation',
+        error: 'There is no TeX installation for this app to add packages to.'
+      })
+      return this.getState(false)
+    }
+
+    this.installing = true
+    this.cancelled = false
+    const listed = names.join(', ')
+    try {
+      this.emit(phaseProgress('packages', `Installing ${listed}…`))
+      await this.runTlmgrInstall(tlmgr, managedTexDir(this.rootDir), names)
+      this.emit({ phase: 'done', percent: 100, message: `Installed ${listed}.` })
+    } catch (err) {
+      // Deliberately not the cleanup the first install does: a failed add
+      // leaves a tree that still compiles everything it compiled before, and
+      // deleting it over one missing package would be a catastrophic answer
+      // to a small problem.
+      this.emit({
+        phase: 'failed',
+        percent: 0,
+        message: this.cancelled ? 'Cancelled' : `Could not install ${listed}`,
+        error: this.cancelled ? 'Cancelled.' : (err as Error).message
+      })
+    } finally {
+      this.installing = false
+      this.running = null
+    }
+    return this.getState(false)
+  }
+
+  private async runTlmgrInstall(tlmgr: string, cwd: string, names: string[]): Promise<void> {
+    await this.runSpec(spawnSpec(tlmgr, ['install', ...names], process.platform), cwd, (line) => {
+      const update = progressFromLine('packages', line)
+      if (update) this.emit(update)
+    })
+  }
+
+  /**
+   * The managed `tlmgr`, or null when there is no installation.
+   *
+   * On Windows this is `tlmgr.bat`, which Node will not spawn directly —
+   * `spawnSpec` routes it through the command interpreter.
+   */
+  private tlmgrPath(): string | null {
+    const binDir = managedBinDir(this.rootDir)
+    if (!binDir) return null
+    const tlmgr = join(binDir, tlmgrName(process.platform))
+    return existsSync(tlmgr) ? tlmgr : null
   }
 
   /**

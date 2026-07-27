@@ -68,6 +68,7 @@ const texAPI: TexAPI = {
   install: () => ipcRenderer.invoke('tex:install'),
   cancel: () => ipcRenderer.invoke('tex:cancel'),
   remove: () => ipcRenderer.invoke('tex:remove'),
+  installPackages: (names: string[]) => ipcRenderer.invoke('tex:installPackages', names),
   reveal: () => ipcRenderer.invoke('tex:reveal'),
   onProgress: (cb) => {
     const listener = (_: unknown, progress: TexInstallProgress): void => cb(progress)

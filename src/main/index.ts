@@ -271,6 +271,10 @@ app.whenReady().then(async () => {
     return installer.getState(await hasSystemTex())
   })
 
+  ipcMain.handle('tex:installPackages', async (_, names: string[]) =>
+    (await getTexInstaller()).addPackages(names)
+  )
+
   ipcMain.handle('tex:reveal', async () => {
     const { managedTexDir } = await import('./latex/managed-tex')
     const dir = managedTexDir(storeManager!.rootDir)

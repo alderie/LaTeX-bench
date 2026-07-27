@@ -15,7 +15,7 @@ import type { BuildError } from '@shared/types'
 import { usePaperStore } from '../stores/paperStore'
 import { useUiStore } from '../stores/uiStore'
 import { jumpToLine } from '../editor/navigate'
-import { TexInstallCard, useTexState } from './TexInstallCard'
+import { MissingPackagesCard, TexInstallCard, useTexState } from './TexInstallCard'
 
 // What the compiler said.
 //
@@ -160,9 +160,10 @@ export function BuildPanel(): React.JSX.Element | null {
             </button>
           </div>
 
-          {/* Above the problem list, because when it shows at all it is the
-              answer to every problem in that list. */}
+          {/* Above the problem list, because when either shows at all it is
+              the answer to every problem in that list. */}
           <TexInstallCard />
+          <MissingPackagesCard />
 
           {showLog ? (
             <pre className="build-panel__log" ref={logRef}>

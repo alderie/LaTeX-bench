@@ -34,6 +34,8 @@ interface PaperState {
     log: string
     pdfPath: string | null
     errors: BuildResult['errors']
+    /** Packages the build died for want of, which the panel offers to fetch. */
+    missingPackages: BuildResult['missingPackages']
     durationMs: number
     /** Bumped on every completed build, so the PDF pane knows to re-read. */
     revision: number
@@ -174,6 +176,7 @@ const EMPTY_BUILD = (): PaperState['build'] => ({
   log: '',
   pdfPath: null,
   errors: [],
+  missingPackages: [],
   durationMs: 0,
   revision: 0
 })

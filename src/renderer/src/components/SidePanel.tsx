@@ -1,22 +1,17 @@
 import * as React from 'react'
-import { useEffect, useRef, useState } from 'react'
-import { PanelLeft, Plus, Trash2 } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { FileText, PanelLeft, Plus, Search, Trash2, X } from 'lucide-react'
 import { useLibraryStore } from '../stores/libraryStore'
 import { usePaperStore } from '../stores/paperStore'
 import { useUiStore } from '../stores/uiStore'
+import { useInlineRename } from '../hooks/useInlineRename'
+import {
+  FILTER_THRESHOLD,
+  filterPapers,
+  formatRelative,
+  groupPapers
+} from '../lib/library-view'
 import type { PaperMeta } from '@shared/types'
-
-function formatRelative(ts: number): string {
-  const diff = Date.now() - ts
-  const min = 60 * 1000
-  const hour = 60 * min
-  const day = 24 * hour
-  if (diff < min) return 'just now'
-  if (diff < hour) return `${Math.floor(diff / min)}m ago`
-  if (diff < day) return `${Math.floor(diff / hour)}h ago`
-  if (diff < 30 * day) return `${Math.floor(diff / day)}d ago`
-  return new Date(ts).toLocaleDateString()
-}
 
 export function SidePanel(): React.JSX.Element {
   const sidebarOpen = useUiStore((s) => s.sidebarOpen)
@@ -32,9 +27,11 @@ export function SidePanel(): React.JSX.Element {
   const renamePaper = useLibraryStore((s) => s.renamePaper)
   const loadPaper = usePaperStore((s) => s.loadPaper)
 
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [editValue, setEditValue] = useState('')
-  const committingRef = useRef(false)
+  const [query, setQuery] = useState('')
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const rename = useInlineRename(async (title) => {
+    if (renamingId) await renamePaper(renamingId, title)
+  })
 
   useEffect(() => {
     void loadLibrary()
@@ -46,34 +43,11 @@ export function SidePanel(): React.JSX.Element {
     }
   }, [selectedPaperId, loadPaper])
 
+  const groups = useMemo(() => groupPapers(filterPapers(papers, query)), [papers, query])
+  const showFilter = papers.length >= FILTER_THRESHOLD
+
   const handleCreate = async (): Promise<void> => {
     await createPaper('Untitled paper')
-  }
-
-  const startEdit = (paper: PaperMeta): void => {
-    setEditingId(paper.id)
-    setEditValue(paper.title)
-  }
-
-  const commitEdit = async (): Promise<void> => {
-    if (committingRef.current) return
-    committingRef.current = true
-    try {
-      const id = editingId
-      if (!id) return
-      const trimmed = editValue.trim()
-      const original = papers.find((p) => p.id === id)
-      setEditingId(null)
-      if (trimmed && original && trimmed !== original.title) {
-        await renamePaper(id, trimmed)
-      }
-    } finally {
-      committingRef.current = false
-    }
-  }
-
-  const cancelEdit = (): void => {
-    setEditingId(null)
   }
 
   const handleDelete = async (paper: PaperMeta): Promise<void> => {
@@ -82,11 +56,19 @@ export function SidePanel(): React.JSX.Element {
     await deletePaper(paper.id)
   }
 
+  const startRename = (paper: PaperMeta): void => {
+    setRenamingId(paper.id)
+    rename.start(paper.title)
+  }
+
   return (
     <aside className={'side-panel' + (sidebarOpen ? ' side-panel--open' : '')}>
       <div className="side-panel-inner">
         <div className="side-panel__header">
-          <span className="side-panel__heading">Papers</span>
+          <span className="side-panel__heading">
+            Papers
+            {papers.length > 0 && <span className="side-panel__count">{papers.length}</span>}
+          </span>
           <div className="side-panel__header-actions">
             <button
               className="icon-button"
@@ -106,82 +88,126 @@ export function SidePanel(): React.JSX.Element {
             </button>
           </div>
         </div>
+
+        {showFilter && (
+          <div className="side-panel__search">
+            <Search size={13} strokeWidth={1.75} />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Filter papers"
+              aria-label="Filter papers"
+              spellCheck={false}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') setQuery('')
+                e.stopPropagation()
+              }}
+            />
+            {query !== '' && (
+              <button
+                className="side-panel__search-clear"
+                onClick={() => setQuery('')}
+                aria-label="Clear filter"
+                title="Clear filter"
+              >
+                <X size={12} strokeWidth={2} />
+              </button>
+            )}
+          </div>
+        )}
+
         <div className="side-panel__list">
           {!loaded && <div className="side-panel__empty">Loading…</div>}
+
           {loaded && papers.length === 0 && (
-            <div className="side-panel__empty">No papers yet.</div>
+            <div className="side-panel__empty">
+              <FileText size={20} strokeWidth={1.25} />
+              <p>No papers yet</p>
+              <button className="side-panel__empty-action" onClick={handleCreate}>
+                Create your first paper
+              </button>
+            </div>
           )}
-          {papers.map((paper) => {
-            const isActive = paper.id === selectedPaperId
-            const isEditing = editingId === paper.id
-            return (
-              <div
-                key={paper.id}
-                className={
-                  'side-panel__item' + (isActive ? ' side-panel__item--active' : '')
-                }
-                role="button"
-                tabIndex={0}
-                onClick={() => {
-                  if (isEditing) return
-                  selectPaper(paper.id)
-                }}
-                onKeyDown={(e) => {
-                  if (isEditing) return
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault()
-                    selectPaper(paper.id)
-                  }
-                }}
-              >
-                <div className="side-panel__item-row">
-                  {isEditing ? (
-                    <input
-                      autoFocus
-                      className="side-panel__item-input"
-                      value={editValue}
-                      onChange={(e) => setEditValue(e.target.value)}
-                      onBlur={() => void commitEdit()}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault()
-                          void commitEdit()
-                        } else if (e.key === 'Escape') {
-                          e.preventDefault()
-                          cancelEdit()
-                        }
-                      }}
-                      onClick={(e) => e.stopPropagation()}
-                    />
-                  ) : (
-                    <span
-                      className="side-panel__item-title"
-                      onClick={(e) => {
-                        if (isActive) {
-                          e.stopPropagation()
-                          startEdit(paper)
-                        }
-                      }}
-                    >
-                      {paper.title}
-                    </span>
-                  )}
-                  <button
-                    className="side-panel__item-delete"
-                    title="Delete paper"
-                    aria-label="Delete paper"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      void handleDelete(paper)
+
+          {loaded && papers.length > 0 && groups.length === 0 && (
+            <div className="side-panel__empty">
+              <p>Nothing matches “{query}”</p>
+            </div>
+          )}
+
+          {groups.map((group) => (
+            <div key={group.label} className="side-panel__group">
+              <div className="side-panel__group-heading">{group.label}</div>
+              {group.papers.map((paper) => {
+                const isActive = paper.id === selectedPaperId
+                const isRenaming = rename.editing && renamingId === paper.id
+                return (
+                  <div
+                    key={paper.id}
+                    className={
+                      'side-panel__item' + (isActive ? ' side-panel__item--active' : '')
+                    }
+                    role="button"
+                    tabIndex={0}
+                    title={paper.title}
+                    onClick={() => {
+                      if (isRenaming) return
+                      selectPaper(paper.id)
+                    }}
+                    onDoubleClick={() => startRename(paper)}
+                    onKeyDown={(e) => {
+                      if (isRenaming) return
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        selectPaper(paper.id)
+                      } else if (e.key === 'F2') {
+                        e.preventDefault()
+                        startRename(paper)
+                      }
                     }}
                   >
-                    <Trash2 size={14} strokeWidth={1.5} />
-                  </button>
-                </div>
-                <span className="side-panel__item-meta">{formatRelative(paper.updatedAt)}</span>
-              </div>
-            )
-          })}
+                    <div className="side-panel__item-row">
+                      {isRenaming ? (
+                        <input
+                          className="side-panel__item-input"
+                          {...rename.inputProps}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      ) : (
+                        <span
+                          className="side-panel__item-title"
+                          onClick={(e) => {
+                            // A single click on the name of the paper you're
+                            // already in renames it; on any other paper it
+                            // has to open it first.
+                            if (!isActive) return
+                            e.stopPropagation()
+                            startRename(paper)
+                          }}
+                        >
+                          {paper.title}
+                        </span>
+                      )}
+                      <button
+                        className="side-panel__item-delete"
+                        title="Delete paper"
+                        aria-label="Delete paper"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          void handleDelete(paper)
+                        }}
+                      >
+                        <Trash2 size={14} strokeWidth={1.5} />
+                      </button>
+                    </div>
+                    <span className="side-panel__item-meta">
+                      {formatRelative(paper.updatedAt)}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          ))}
         </div>
       </div>
     </aside>

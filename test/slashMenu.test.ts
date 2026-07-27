@@ -116,6 +116,42 @@ describe('slash menu — insertion', () => {
   })
 })
 
+describe('slash menu — icons', () => {
+  it('gives every row a glyph', () => {
+    // Fifteen rows of near-identical text get read one line at a time; a
+    // distinct shape per kind is what makes the list scannable.
+    const view = makeView()
+    type(view, '/')
+    const rows = document.querySelectorAll('.slash-menu__item')
+    expect(rows.length).toBeGreaterThan(5)
+    for (const row of rows) {
+      expect(row.querySelector('.slash-menu__icon svg')).not.toBeNull()
+    }
+    view.destroy()
+  })
+
+  it('uses different glyphs for different kinds of insert', () => {
+    const view = makeView()
+    type(view, '/')
+    const shapes = new Set(
+      [...document.querySelectorAll('.slash-menu__icon svg')].map((svg) => svg.innerHTML)
+    )
+    expect(shapes.size).toBeGreaterThan(4)
+    view.destroy()
+  })
+
+  it('keeps icons out of the accessibility tree', () => {
+    // Every glyph sits next to its own label, so announcing it would read
+    // the entry's name twice.
+    const view = makeView()
+    type(view, '/')
+    for (const svg of document.querySelectorAll('.slash-menu__icon svg')) {
+      expect(svg.getAttribute('aria-hidden')).toBe('true')
+    }
+    view.destroy()
+  })
+})
+
 describe('slash menu — live entries from the document', () => {
   beforeEach(() => {
     labelRegistry.rebuild(latexSchema.nodes.doc.create({}, [latexSchema.nodes.paragraph.create()]))

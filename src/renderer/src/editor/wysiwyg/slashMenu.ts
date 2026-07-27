@@ -3,6 +3,7 @@ import type { EditorView } from 'prosemirror-view'
 import type { Node as PMNode } from 'prosemirror-model'
 import { latexSchema } from './schema'
 import * as labelRegistry from './labelRegistry'
+import { createIcon, type IconName } from './icons'
 
 // A `/` command menu for inserting LaTeX structures.
 //
@@ -33,6 +34,12 @@ interface SlashItem {
   /** Extra words to match against, beyond the title. */
   keywords: string
   group: string
+  /**
+   * Leading glyph. Worth the space: a menu of fifteen near-identical text
+   * rows is read one line at a time, whereas a distinct shape per kind lets
+   * the eye jump straight to the matrix or the table.
+   */
+  icon: IconName
   run: (view: EditorView, from: number, to: number) => void
 }
 
@@ -117,6 +124,7 @@ function matrixSource(env: string, n: number): string {
 const STATIC_ITEMS: SlashItem[] = [
   {
     title: 'Display equation',
+    icon: 'function',
     hint: 'equation',
     keywords: 'math display numbered',
     group: 'Math',
@@ -125,6 +133,7 @@ const STATIC_ITEMS: SlashItem[] = [
   },
   {
     title: 'Unnumbered equation',
+    icon: 'parentheses',
     hint: '\\[ … \\]',
     keywords: 'math display plain',
     group: 'Math',
@@ -132,6 +141,7 @@ const STATIC_ITEMS: SlashItem[] = [
   },
   {
     title: 'Aligned equations',
+    icon: 'equal',
     hint: 'align',
     keywords: 'math multiline align system',
     group: 'Math',
@@ -140,6 +150,7 @@ const STATIC_ITEMS: SlashItem[] = [
   },
   {
     title: 'Cases',
+    icon: 'braces',
     hint: 'cases',
     keywords: 'math piecewise branch',
     group: 'Math',
@@ -153,6 +164,7 @@ const STATIC_ITEMS: SlashItem[] = [
   },
   {
     title: 'Matrix (2×2)',
+    icon: 'grid2',
     hint: 'pmatrix',
     keywords: 'math matrix array grid',
     group: 'Math',
@@ -160,6 +172,7 @@ const STATIC_ITEMS: SlashItem[] = [
   },
   {
     title: 'Matrix (3×3)',
+    icon: 'grid',
     hint: 'pmatrix',
     keywords: 'math matrix array grid',
     group: 'Math',
@@ -167,6 +180,7 @@ const STATIC_ITEMS: SlashItem[] = [
   },
   {
     title: 'Bracket matrix',
+    icon: 'brackets',
     hint: 'bmatrix',
     keywords: 'math matrix square bracket',
     group: 'Math',
@@ -174,6 +188,7 @@ const STATIC_ITEMS: SlashItem[] = [
   },
   {
     title: 'Inline math',
+    icon: 'sigma',
     hint: '$…$',
     keywords: 'math formula inline',
     group: 'Math',
@@ -182,6 +197,7 @@ const STATIC_ITEMS: SlashItem[] = [
   },
   {
     title: 'Table',
+    icon: 'table',
     hint: 'tabular',
     keywords: 'table tabular grid booktabs',
     group: 'Structure',
@@ -198,6 +214,7 @@ const STATIC_ITEMS: SlashItem[] = [
   },
   {
     title: 'Figure',
+    icon: 'image',
     hint: 'includegraphics',
     keywords: 'figure image graphic plot',
     group: 'Structure',
@@ -216,6 +233,7 @@ const STATIC_ITEMS: SlashItem[] = [
   },
   {
     title: 'Code block',
+    icon: 'code',
     hint: 'lstlisting',
     keywords: 'code listing verbatim snippet',
     group: 'Structure',
@@ -234,6 +252,7 @@ const STATIC_ITEMS: SlashItem[] = [
   },
   {
     title: 'Bulleted list',
+    icon: 'list',
     hint: 'itemize',
     keywords: 'list bullet itemize unordered',
     group: 'Structure',
@@ -241,6 +260,7 @@ const STATIC_ITEMS: SlashItem[] = [
   },
   {
     title: 'Numbered list',
+    icon: 'listOrdered',
     hint: 'enumerate',
     keywords: 'list numbered enumerate ordered',
     group: 'Structure',
@@ -248,6 +268,7 @@ const STATIC_ITEMS: SlashItem[] = [
   },
   {
     title: 'Description list',
+    icon: 'listTree',
     hint: 'description',
     keywords: 'list description term definition',
     group: 'Structure',
@@ -255,6 +276,7 @@ const STATIC_ITEMS: SlashItem[] = [
   },
   {
     title: 'Footnote',
+    icon: 'superscript',
     hint: '\\footnote',
     keywords: 'footnote note aside',
     group: 'Structure',
@@ -273,6 +295,9 @@ const THEOREM_KINDS = ['theorem', 'lemma', 'proposition', 'corollary', 'definiti
 for (const kind of THEOREM_KINDS) {
   STATIC_ITEMS.push({
     title: kind[0].toUpperCase() + kind.slice(1),
+    // A proof is the one entry in this group that ends an argument rather
+    // than stating one, so it gets its own glyph.
+    icon: kind === 'proof' ? 'check' : 'quote',
     hint: `\\begin{${kind}}`,
     keywords: `theorem environment ${kind}`,
     group: 'Theorems',
@@ -292,6 +317,7 @@ function dynamicItems(): SlashItem[] {
   for (const [key, cite] of citations) {
     out.push({
       title: cite.shortLabel && cite.shortLabel !== key ? cite.shortLabel : key,
+      icon: 'book',
       hint: key,
       keywords: `cite citation reference bib ${key}`,
       group: 'Citations',
@@ -308,6 +334,7 @@ function dynamicItems(): SlashItem[] {
   for (const [key, ref] of byKey) {
     out.push({
       title: ref.pretty || key,
+      icon: 'link',
       hint: key,
       keywords: `ref cref reference label ${key} ${ref.kindLabel}`,
       group: 'Cross-references',
@@ -422,13 +449,16 @@ class SlashMenuView {
       if (index === this.selected) row.classList.add('slash-menu__item--active')
       row.setAttribute('role', 'option')
 
+      const icon = document.createElement('span')
+      icon.className = 'slash-menu__icon'
+      icon.appendChild(createIcon(item.icon, 15))
       const title = document.createElement('span')
       title.className = 'slash-menu__title'
       title.textContent = item.title
       const hint = document.createElement('span')
       hint.className = 'slash-menu__hint'
       hint.textContent = item.hint
-      row.append(title, hint)
+      row.append(icon, title, hint)
 
       // mousedown, not click: click fires after the editor has already lost
       // and regained selection, which closes the menu before we can act.

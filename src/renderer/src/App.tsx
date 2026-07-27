@@ -4,10 +4,12 @@ import { useEffect } from 'react'
 import { PaperWorkspace } from './components/PaperWorkspace'
 import { useBuild } from './hooks/useBuild'
 import { useShortcuts } from './hooks/useShortcuts'
+import { useZoomGesture } from './hooks/useZoomGesture'
 
 export default function App(): React.JSX.Element {
   useBuild()
   useShortcuts()
+  useZoomGesture()
 
   // Keep the native window background in sync with the resolved theme, so
   // resizing doesn't reveal a white edge in dark mode. The window buttons

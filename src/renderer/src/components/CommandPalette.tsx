@@ -1,7 +1,7 @@
 import * as React from 'react'
 import { useEffect, useMemo, useState } from 'react'
 import { Command } from 'cmdk'
-import { Hash, FilePlus2, FileText, Play } from 'lucide-react'
+import { Hash, FilePlus2, FileText, Play, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react'
 import { useUiStore } from '../stores/uiStore'
 import { useLibraryStore } from '../stores/libraryStore'
 import { usePaperStore } from '../stores/paperStore'
@@ -114,6 +114,45 @@ export function CommandPalette(): React.JSX.Element | null {
                   <span>{p.title}</span>
                 </CommandItemC>
               ))}
+            </CommandGroupC>
+
+            <CommandGroupC heading="View" className="command-palette__group">
+              <CommandItemC
+                value="reset zoom 100% actual size"
+                onSelect={() => {
+                  close()
+                  useUiStore.getState().resetZoom()
+                }}
+                className="command-palette__item"
+              >
+                <RotateCcw size={14} />
+                <span>Reset zoom to 100%</span>
+                <span className="command-palette__shortcut">Ctrl/Cmd 0</span>
+              </CommandItemC>
+              <CommandItemC
+                value="zoom in larger text bigger"
+                onSelect={() => {
+                  close()
+                  useUiStore.getState().stepZoom(1)
+                }}
+                className="command-palette__item"
+              >
+                <ZoomIn size={14} />
+                <span>Zoom in</span>
+                <span className="command-palette__shortcut">Ctrl/Cmd +</span>
+              </CommandItemC>
+              <CommandItemC
+                value="zoom out smaller text"
+                onSelect={() => {
+                  close()
+                  useUiStore.getState().stepZoom(-1)
+                }}
+                className="command-palette__item"
+              >
+                <ZoomOut size={14} />
+                <span>Zoom out</span>
+                <span className="command-palette__shortcut">Ctrl/Cmd −</span>
+              </CommandItemC>
             </CommandGroupC>
 
             <CommandGroupC heading="Actions" className="command-palette__group">

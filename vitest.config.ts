@@ -13,7 +13,7 @@ import { resolve } from 'path'
 export default defineConfig({
   test: {
     environment: 'jsdom',
-    include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'test/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'test/**/*.test.ts', 'test/**/*.test.tsx'],
     // unified-latex packages and prosemirror are ESM; vitest handles them
     // natively. No special inline config needed.
     globals: false

@@ -22,6 +22,7 @@ import { captionNodeView } from './nodeviews/CaptionNodeView'
 import { footnoteNodeView } from './nodeviews/FootnoteNodeView'
 import { mathInlineInputRule, mathBlockInputRule } from './inputRules'
 import { slashMenu } from './slashMenu'
+import { publishSelection, setActiveEditorView } from './editor-bridge'
 import * as labelRegistry from './labelRegistry'
 import { usePaperStore } from '../../stores/paperStore'
 
@@ -112,6 +113,9 @@ export function WysiwygEditor(): React.JSX.Element {
           const newState = view.state.apply(tx)
           view.updateState(newState)
           if (tx.docChanged) syncDoc.schedule(newState.doc)
+          // Cheap, and a no-op unless the toolbar's view of the selection
+          // actually changed — see editor-bridge.
+          publishSelection(newState)
         }
       })
       // Initial population — this is what populates labels for the
@@ -119,10 +123,13 @@ export function WysiwygEditor(): React.JSX.Element {
       labelRegistry.rebuild(state.doc)
       syncRef.current = syncDoc
       viewRef.current = view
+      setActiveEditorView(view)
+      publishSelection(state)
     })()
 
     return () => {
       cancelled = true
+      setActiveEditorView(null)
       syncRef.current?.flush()
       syncRef.current = null
       viewRef.current?.destroy()

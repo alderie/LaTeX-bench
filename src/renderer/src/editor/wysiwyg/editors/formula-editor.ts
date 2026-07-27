@@ -2,19 +2,20 @@ import katex from 'katex'
 import {
   addColumn,
   addRow,
-  cellSpans,
   ENV_CHOICES,
   errorOffset,
-  gridRegion,
-  isGridBody,
+  gridCells,
+  gridSpans,
   nextCell,
   parseMathShell,
   presentBody,
+  rewriteGrid,
   serializeMathShell,
   shellChoice,
   switchEnvironment,
   tidyErrorMessage,
   withLabelText,
+  writeCell,
   type MathShell
 } from '../math-source'
 import {
@@ -28,7 +29,8 @@ import {
 import { getMathMacros } from '../math-macros'
 import { createIcon } from '../icons'
 import { createDropdown, type Dropdown } from '../dropdown'
-import { MatrixGrid } from '../nodeviews/matrix-grid'
+import { markMathCells } from '../renderers/math-cells'
+import { CellEditor, type CellSite } from './cell-editor'
 import { CodeField } from './code-field'
 import { EditorPanel, panelButton, panelName } from './editor-panel'
 
@@ -51,6 +53,14 @@ import { EditorPanel, panelButton, panelName } from './editor-panel'
 //     area — dedented, with the wrapper gone
 //
 // and `\` completes, listing the paper's own macros first.
+//
+// The typeset formula underneath is not only a preview: every cell of every
+// grid in it can be clicked and typed into, which is where matrices are
+// edited now. The previous answer to "edit this matrix as a matrix" was a
+// separate view of boxes you had to switch to, and it appeared only when the
+// whole formula was one matrix — so the common `H = \begin{pmatrix}…` had
+// nothing to click. See `renderers/math-cells`, which traces a rendered cell
+// back to the characters it came from.
 //
 // The chrome around all that — the bar, the hint, the delete button, the
 // preview strip — is `EditorPanel`, shared with the table and preamble
@@ -81,19 +91,16 @@ export class FormulaEditor {
   private completions: CompletionPopup | null = null
   private gridControls: HTMLElement | null = null
   private envDropdown: Dropdown | null = null
-  private gridHost: HTMLElement | null = null
-  private grid: MatrixGrid | null = null
-  private sourceToggle: HTMLButtonElement | null = null
+  private cellEditor: CellEditor | null = null
+  private cells: CellSite[] = []
   /**
-   * Whether to edit a grid as cells rather than as LaTeX.
+   * Which grid the row and column buttons act on.
    *
-   * Defaults on for a matrix and off for `align`, even though both are grids.
-   * A matrix is a table of short entries and reads as one; an `align` is a
-   * derivation whose rows are long, and chopping those into fixed-width
-   * inputs would be a worse text area, not a better table. The toggle in the
-   * bar overrides either way.
+   * A formula can hold several — `H` and `H^{-1}` side by side — and "add a
+   * row" has to mean one of them. It means the last one touched, which is the
+   * one the author is looking at.
    */
-  private preferGrid = true
+  private activeGrid = 0
   private readonly original: string
   private readonly initialBody: string
   private readonly initialChoice: string | null
@@ -118,42 +125,36 @@ export class FormulaEditor {
 
     this.code = options.displayMode ? this.buildTextarea() : this.buildInput()
     this.field = this.code.input
-    // `env !== ''` is "the body is a matrix", as opposed to "the formula's own
-    // environment happens to be a grid" — see `preferGrid`.
-    this.preferGrid = (gridRegion(this.shell, this.field.value)?.env ?? '') !== ''
 
     if (options.displayMode) {
       this.buildBar()
-      this.gridHost = document.createElement('div')
-      this.gridHost.className = 'block-editor__grid-host'
-      this.panel.body.appendChild(this.gridHost)
       this.panel.body.appendChild(this.code.dom)
       this.preview = this.panel.previewHost()
       this.preview.classList.add('math-preview')
+      this.cellEditor = new CellEditor({
+        host: this.preview,
+        read: (cell) => this.field.value.slice(cell.from, cell.to),
+        write: (cell, text) => this.writeCellText(cell, text),
+        repaint: () => this.repaint(),
+        grow: (cell, what) => this.growGrid(what, cell.grid),
+        onDone: () => this.focus(),
+        onCommitBlock: () => this.finish(true)
+      })
       this.paint()
       this.updateGridControls()
-      this.updateSurface()
     } else {
       this.panel.body.appendChild(this.code.dom)
     }
 
     this.completions = new CompletionPopup((completion) => this.accept(completion))
     this.field.addEventListener('keydown', (event) => this.onKeyDown(event as KeyboardEvent))
-    // On the subtree rather than the field: the grid's cells, the label and
-    // the environment list are all part of "still editing this formula", and
-    // a per-field blur handler would have to enumerate them.
+    // On the subtree rather than the field: the cell fields in the preview,
+    // the label and the environment list are all part of "still editing this
+    // formula", and a per-field blur handler would have to enumerate them.
     this.dom.addEventListener('focusout', () => this.onBlur())
-    // Escape and ⌘⏎ have to work from a grid cell too, and those inputs are
-    // built by MatrixGrid, which knows nothing about committing a formula.
-    this.dom.addEventListener('keydown', (event) => this.onHostKeyDown(event))
   }
 
   focus(): void {
-    if (this.grid && this.gridHost && !this.gridHost.hidden) {
-      const grid = this.grid
-      requestAnimationFrame(() => grid.focus())
-      return
-    }
     const el = this.field
     requestAnimationFrame(() => {
       el.focus()
@@ -177,8 +178,8 @@ export class FormulaEditor {
     this.completions = null
     this.envDropdown?.destroy()
     this.envDropdown = null
-    this.grid?.destroy()
-    this.grid = null
+    this.cellEditor?.destroy()
+    this.cellEditor = null
   }
 
   // ── Chrome ───────────────────────────────────────────────────────────
@@ -210,23 +211,12 @@ export class FormulaEditor {
     this.gridControls = document.createElement('span')
     this.gridControls.className = 'block-editor__grid'
     this.gridControls.appendChild(
-      panelButton('rows', 'Add row', () => this.applyToBody(addRow), { plus: true })
+      panelButton('rows', 'Add row', () => this.growFromBar('row'), { plus: true })
     )
     this.gridControls.appendChild(
-      panelButton('columns', 'Add column', () => this.applyToBody(addColumn), { plus: true })
+      panelButton('columns', 'Add column', () => this.growFromBar('column'), { plus: true })
     )
     this.panel.addControl(this.gridControls)
-
-    // Only appears when there is a grid to switch away from — the cells view
-    // is the default for a matrix, and this is the way back to the source for
-    // anything the table can't express (a `\multicolumn`, a stray `\hline`).
-    this.sourceToggle = panelButton('code', 'Edit as LaTeX', () => {
-      this.preferGrid = !this.preferGrid
-      this.updateSurface()
-      this.focus()
-    })
-    this.sourceToggle.hidden = true
-    this.panel.addControl(this.sourceToggle)
   }
 
   /** Numbered environments are the ones worth referring to by label. */
@@ -300,118 +290,97 @@ export class FormulaEditor {
   // ── Editing ──────────────────────────────────────────────────────────
 
   private switchEnv(choice: string): void {
+    // Any open cell is holding offsets into a body about to be rewritten.
+    this.cellEditor?.close()
     const result = switchEnvironment(this.shell, choice, this.field.value)
     this.shell = result.shell
     this.code.value = result.body
     this.schedulePaint()
     this.updateGridControls()
-    // `align` is a grid and `equation` isn't, so the surface itself changes.
-    this.updateSurface()
     this.focus()
   }
 
-  // ── The cells view ───────────────────────────────────────────────────
+  // ── The cells in the rendering ───────────────────────────────────────
 
-  /**
-   * Show the grid when the formula has one and the author hasn't asked for the
-   * source, and the text area otherwise. Called after anything that can change
-   * whether a grid exists: typing, switching environment, toggling the view.
-   */
-  private updateSurface(): void {
-    const host = this.gridHost
-    if (!host) return
-    const region = gridRegion(this.shell, this.field.value)
-    const showGrid = region !== null && this.preferGrid
-
-    if (this.sourceToggle) {
-      this.sourceToggle.hidden = region === null
-      this.sourceToggle.title = showGrid ? 'Edit as LaTeX' : 'Edit as a grid'
-      this.sourceToggle.setAttribute('aria-label', this.sourceToggle.title)
-      this.sourceToggle.classList.toggle('block-editor__button--on', !showGrid)
-    }
-    // The row/column buttons are the source view's way to grow a grid; the
-    // cells view grows by typing into the dashed edge, so they'd be noise.
-    this.gridControls?.classList.toggle('block-editor__grid--hidden', showGrid)
-
-    host.hidden = !showGrid
-    this.code.setHidden(showGrid)
-    if (!showGrid) {
-      this.grid?.destroy()
-      this.grid = null
-      return
-    }
-
-    const body = this.field.value.slice(region!.from, region!.to)
-    if (this.grid) {
-      this.grid.setBody(body)
-      return
-    }
-    this.grid = new MatrixGrid({ body, onChange: (next) => this.writeGrid(next) })
-    host.replaceChildren(this.grid.dom)
+  /** Write a cell's new text into the body, from an edit in the preview. */
+  private writeCellText(cell: CellSite, text: string): number {
+    const result = writeCell(this.field.value, cell.from, cell.to, text)
+    this.code.value = result.body
+    this.activeGrid = cell.grid
+    this.updateGridControls()
+    return result.to
   }
 
-  /** Splice a body the grid rewrote back into the region it came from. */
-  private writeGrid(gridBody: string): void {
-    const region = gridRegion(this.shell, this.field.value)
-    if (!region) return
-    const value = this.field.value
-    // A grid that is the whole body sits where it is; one inside a `\begin`
-    // keeps the wrapper on its own lines, which is how it was written and how
-    // the source view will show it if the author switches back.
-    const text =
-      region.env === ''
-        ? gridBody
-        : `\n${gridBody
-            .split('\n')
-            .map((line) => `  ${line}`)
-            .join('\n')}\n`
-    this.code.value = value.slice(0, region.from) + text + value.slice(region.to)
-    this.schedulePaint()
+  /** Redraw the formula now — not on the next frame — and re-find its cells. */
+  private repaint(): CellSite[] {
+    this.paint()
+    return this.cells
   }
 
   /**
-   * Finish keys, for focus that lives in a cell. The text area has its own
-   * handler, so skip anything originating there to avoid running twice.
+   * Add a row or a column to one grid of the formula.
+   *
+   * To *one* grid: the body of `H = \begin{pmatrix}…\end{pmatrix}, \quad
+   * H^{-1} = …` is not itself a grid, and the row break a whole-body rewrite
+   * used to add landed between the two matrices rather than inside either.
    */
-  private onHostKeyDown(event: KeyboardEvent): void {
-    if (event.target === this.field) return
-    if (!this.gridHost?.contains(event.target as Node)) return
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      this.finish(false)
-      return
-    }
-    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-      event.preventDefault()
-      this.finish(true)
-    }
+  private growGrid(what: 'row' | 'column', grid = this.activeGrid): void {
+    const spans = gridSpans(this.shell, this.field.value)
+    const span = spans[grid] ?? spans[0]
+    if (!span) return
+    this.activeGrid = spans.indexOf(span)
+    this.code.value = rewriteGrid(this.field.value, span, what === 'row' ? addRow : addColumn)
+    this.updateGridControls()
   }
 
-  /** Run a body transform, then put the caret in the cell it created. */
-  private applyToBody(transform: (body: string) => string): void {
-    const before = cellSpans(this.field.value).length
-    const next = transform(this.field.value)
-    this.code.value = next
-    const spans = cellSpans(next)
-    const target = spans[Math.min(before, spans.length - 1)]
+  /**
+   * Grow the active grid from the bar, then land in the cell that made.
+   *
+   * In the rendering when there is one to click, since that is where the
+   * author is looking; in the source otherwise, which is all a formula that
+   * doesn't render has.
+   */
+  private growFromBar(what: 'row' | 'column'): void {
+    this.cellEditor?.close()
+    this.growGrid(what)
+    const target = this.newestCell(what, this.activeGrid)
+    this.paint()
+    if (target && this.cellEditor?.openAt(this.activeGrid, target.row, target.column)) return
     this.field.focus()
     if (target) this.field.setSelectionRange(target.to, target.to)
-    this.schedulePaint()
+  }
+
+  /** Where the cell a grow just created is: last row, or last column. */
+  private newestCell(
+    what: 'row' | 'column',
+    grid: number
+  ): { row: number; column: number; to: number } | null {
+    const span = gridSpans(this.shell, this.field.value)[grid]
+    if (!span) return null
+    const cells = gridCells(this.field.value, span)
+    if (cells.length === 0) return null
+    const lastRow = Math.max(...cells.map((cell) => cell.row))
+    const lastColumn = Math.max(...cells.map((cell) => cell.column))
+    return (
+      cells.find((cell) =>
+        what === 'row'
+          ? cell.row === lastRow && cell.column === 0
+          : cell.row === 0 && cell.column === lastColumn
+      ) ?? null
+    )
   }
 
   private onInput(): void {
     this.schedulePaint()
     this.updateCompletions()
     this.updateGridControls()
-    this.updateSurface()
   }
 
   private updateGridControls(): void {
     if (!this.gridControls) return
-    this.gridControls.classList.toggle(
-      'block-editor__grid--off',
-      !isGridBody(this.shell, this.field.value)
-    )
+    const spans = gridSpans(this.shell, this.field.value)
+    if (this.activeGrid >= spans.length) this.activeGrid = 0
+    this.gridControls.classList.toggle('block-editor__grid--off', spans.length === 0)
   }
 
   /**
@@ -537,7 +506,15 @@ export class FormulaEditor {
       return
     }
     if (direction === -1) return
-    this.applyToBody(addColumn)
+    // The grid the caret is in, which for a formula holding two matrices is
+    // not necessarily the one the bar's buttons would grow.
+    const grid = gridForCaret(this.shell, this.field.value, caret)
+    this.growGrid('column', grid)
+    const span = gridSpans(this.shell, this.field.value)[grid]
+    const cells = span ? gridCells(this.field.value, span) : []
+    const made = cells[cells.length - 1]
+    if (made) this.field.setSelectionRange(made.to, made.to)
+    this.schedulePaint()
   }
 
   /** Remove the equation, editor and all. */
@@ -552,6 +529,10 @@ export class FormulaEditor {
     this.paintQueued = true
     requestAnimationFrame(() => {
       this.paintQueued = false
+      // Redrawing under an open cell field would throw away the element it
+      // is sitting on. Nothing is lost by waiting: the cell writes its text
+      // through as it is typed, and finishing repaints.
+      if (this.cellEditor?.active) return
       this.paint()
     })
   }
@@ -561,6 +542,8 @@ export class FormulaEditor {
     if (!preview) return
     preview.classList.remove('math-preview--error')
     preview.replaceChildren()
+    this.cells = []
+    this.cellEditor?.setCells(this.cells)
     const source = this.field.value.trim()
     if (source === '') return
     try {
@@ -570,6 +553,8 @@ export class FormulaEditor {
         strict: false,
         macros: getMathMacros()
       })
+      this.cells = markMathCells(preview, this.shell, this.field.value)
+      this.cellEditor?.setCells(this.cells)
     } catch (err) {
       preview.classList.add('math-preview--error')
       preview.appendChild(this.errorReport(err as Error))
@@ -758,6 +743,25 @@ class CompletionPopup {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
+
+/**
+ * Which grid the caret sits in, innermost first.
+ *
+ * Tab at the end of a matrix should grow *that* matrix, and a formula can
+ * hold more than one — or one inside another, where the answer is the inner.
+ */
+function gridForCaret(shell: MathShell, body: string, caret: number): number {
+  let best = 0
+  let narrowest = Infinity
+  gridSpans(shell, body).forEach((span, index) => {
+    if (caret < span.from || caret > span.to) return
+    const width = span.to - span.from
+    if (width >= narrowest) return
+    narrowest = width
+    best = index
+  })
+  return best
+}
 
 /** Macro names the current paper's preamble declared, for completion. */
 function userMacroNames(): string[] {

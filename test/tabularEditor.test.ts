@@ -135,6 +135,95 @@ describe('the table editor', () => {
     expect(commit).toHaveBeenCalledTimes(1)
   })
 
+  describe('editing cells in the rendering', () => {
+    function cells(editor: TabularEditor): HTMLElement[] {
+      return [...editor.dom.querySelectorAll<HTMLElement>('.block-editor__preview td')]
+    }
+
+    function click(cell: HTMLElement): void {
+      cell.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+    }
+
+    function cellField(editor: TabularEditor): HTMLInputElement {
+      return editor.dom.querySelector('.cell-editor input') as HTMLInputElement
+    }
+
+    function type(field: HTMLInputElement, value: string): void {
+      field.value = value
+      field.dispatchEvent(new window.Event('input', { bubbles: true }))
+    }
+
+    it('opens a field over the cell that was clicked', () => {
+      const { editor } = open()
+      click(cells(editor)[4])
+      expect(cellField(editor).value).toBe('4.81')
+    })
+
+    it('writes the cell back without reformatting the rest of the table', () => {
+      // The surgical part: everything the author wrote outside the cell —
+      // the rules, the spacing, the column spec — comes back byte for byte.
+      const { editor, field } = open()
+      click(cells(editor)[4])
+      type(cellField(editor), '3.92 \\pm 0.4')
+      expect(field.value).toBe(TABLE.replace('4.81', '3.92 \\pm 0.4'))
+    })
+
+    it('walks the row on Tab and wraps to the next one', () => {
+      const { editor } = open()
+      click(cells(editor)[0])
+      press(cellField(editor), 'Tab')
+      expect(cellField(editor).value).toBe('Acc')
+      press(cellField(editor), 'Tab')
+      press(cellField(editor), 'Tab')
+      expect(cellField(editor).value).toBe('SGD')
+    })
+
+    it('drops down a row on Enter', () => {
+      const { editor } = open()
+      click(cells(editor)[1])
+      press(cellField(editor), 'Enter')
+      expect(cellField(editor).value).toBe('4.81')
+    })
+
+    it('puts a cell back on Escape without abandoning the table', () => {
+      const { editor, field, cancel } = open()
+      click(cells(editor)[0])
+      type(cellField(editor), 'nonsense')
+      press(cellField(editor), 'Escape')
+      expect(field.value).toBe(TABLE)
+      expect(cancel).not.toHaveBeenCalled()
+    })
+
+    it('commits the table with the cell edit in it', () => {
+      const { editor, commit } = open()
+      click(cells(editor)[4])
+      type(cellField(editor), '9.9')
+      press(cellField(editor), 'Enter', { metaKey: true })
+      expect(commit).toHaveBeenCalledWith(TABLE.replace('4.81', '9.9'))
+    })
+
+    it('opens a cell by the offset a click on the closed table reports', () => {
+      // The rendered table carries the same offsets whether it is being
+      // edited or merely read, which is what lets a click on the document's
+      // own table land in the cell that was clicked.
+      const { editor } = open()
+      const from = Number(cells(editor)[2].dataset.cellFrom)
+      editor.openCell(from)
+      expect(cellField(editor).value).toBe('Time')
+    })
+
+    it('edits the content of a spanning cell, not the macro around it', () => {
+      const source = `\\begin{tabular}{@{}lcc@{}}
+  \\multicolumn{2}{c}{Stable index} & Time \\\\
+\\end{tabular}`
+      const { editor, field } = open(source)
+      click(cells(editor)[0])
+      expect(cellField(editor).value).toBe('Stable index')
+      type(cellField(editor), 'Tail index')
+      expect(field.value).toContain('\\multicolumn{2}{c}{Tail index}')
+    })
+  })
+
   it('deletes the block from the bar', () => {
     const { editor, remove } = open()
     const danger = editor.dom.querySelector('.block-editor__button--danger') as HTMLButtonElement

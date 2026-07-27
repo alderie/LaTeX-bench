@@ -174,6 +174,98 @@ describe('formula editor', () => {
     })
   })
 
+  describe('editing cells in the rendering', () => {
+    const MATRIX = '\\[\n  H = \\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}\n\\]'
+
+    /**
+     * The cells of the typeset formula, in reading order — which is not the
+     * order they appear in the DOM, since KaTeX emits a table column by
+     * column.
+     */
+    function cells(editor: FormulaEditor): HTMLElement[] {
+      const at = (cell: HTMLElement): number =>
+        Number(cell.dataset.cellRow) * 100 + Number(cell.dataset.cellColumn)
+      return [
+        ...editor.dom.querySelectorAll<HTMLElement>('.block-editor__preview [data-cell-from]')
+      ].sort((a, b) => at(a) - at(b))
+    }
+
+    /** Click a cell the way a pointer does: mousedown, which is what opens it. */
+    function click(cell: HTMLElement): void {
+      cell.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+    }
+
+    function cellField(editor: FormulaEditor): HTMLInputElement {
+      return editor.dom.querySelector('.cell-editor input') as HTMLInputElement
+    }
+
+    function type(field: HTMLInputElement, value: string): void {
+      field.value = value
+      field.dispatchEvent(new window.Event('input', { bubbles: true }))
+    }
+
+    it('offers a cell for every entry of a matrix inside a larger formula', () => {
+      // A matrix with maths either side of it is the common case, and the
+      // one the old separate grid view had nothing to say about.
+      const { editor } = open(MATRIX)
+      expect(cells(editor).map((cell) => cell.textContent)).toEqual(['a', 'b', 'c', 'd'])
+    })
+
+    it('opens a field over the cell that was clicked', () => {
+      const { editor } = open(MATRIX)
+      click(cells(editor)[1])
+      expect(cellField(editor)?.value).toBe('b')
+    })
+
+    it('writes what is typed into the source as it is typed', () => {
+      const { editor, field } = open(MATRIX)
+      click(cells(editor)[1])
+      type(cellField(editor), 'x^2')
+      expect(field.value).toBe('H = \\begin{pmatrix} a & x^2 \\\\ c & d \\end{pmatrix}')
+    })
+
+    it('commits the formula with the cell edit in it', () => {
+      const { editor, field, commit } = open(MATRIX)
+      click(cells(editor)[3])
+      type(cellField(editor), '0')
+      press(field, 'Enter', { metaKey: true })
+      expect(commit).toHaveBeenCalledWith(expect.stringContaining('c & 0'))
+    })
+
+    it('walks the grid on Tab', () => {
+      const { editor } = open(MATRIX)
+      click(cells(editor)[0])
+      press(cellField(editor), 'Tab')
+      expect(cellField(editor).value).toBe('b')
+    })
+
+    it('grows the matrix when Tab runs out of cells', () => {
+      const { editor, field } = open(MATRIX)
+      click(cells(editor)[3])
+      press(cellField(editor), 'Tab')
+      expect(field.value).toContain('a & b &')
+      expect(field.value).toContain('c & d &')
+    })
+
+    it('puts a cell back on Escape without abandoning the formula', () => {
+      const { editor, field, cancel } = open(MATRIX)
+      click(cells(editor)[0])
+      type(cellField(editor), 'nonsense')
+      press(cellField(editor), 'Escape')
+      expect(field.value).toContain('a & b')
+      expect(cancel).not.toHaveBeenCalled()
+    })
+
+    it('adds a row to the matrix, not to the formula around it', () => {
+      // A whole-body rewrite put the row break between `H =` and the
+      // matrix, which is a parse error rather than a row.
+      const { editor, field } = open(MATRIX)
+      const [addRow] = editor.dom.querySelectorAll('.block-editor__button')
+      ;(addRow as HTMLButtonElement).click()
+      expect(field.value).toBe('H = \\begin{pmatrix} a & b \\\\ c & d \\\\\n & \\end{pmatrix}')
+    })
+  })
+
   describe('the environment list', () => {
     it('is mounted outside the editor so nothing can clip it', () => {
       // The formula editor sits inside the scrolling editor pane, which

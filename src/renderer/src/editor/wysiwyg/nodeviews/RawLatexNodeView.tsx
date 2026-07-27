@@ -5,6 +5,7 @@ import { isTabularSource, renderTabular } from '../renderers/tabular'
 import { isStructuralSource, renderStructural } from '../renderers/structural'
 import { SourceBlockEditor } from '../editors/source-block-editor'
 import { TabularEditor } from '../editors/tabular-editor'
+import { CELL_ATTRIBUTE } from '../editors/cell-editor'
 
 // A block the parser kept as source. Three of those turn out to be things we
 // can draw — a table, an algorithm, a `\appendix` rule — and the rest are
@@ -31,8 +32,13 @@ class RawLatexView implements NodeView {
     this.dom.className = 'raw-latex-block'
     this.dom.contentEditable = 'false'
     this.render()
-    this.dom.addEventListener('click', () => {
-      if (!this.editing) this.openEditor()
+    this.dom.addEventListener('click', (event) => {
+      if (this.editing) return
+      // A click on a table cell opens that cell, not the top of the source:
+      // the rendering carries the offsets it was drawn from either way, so
+      // the cell under the pointer is known before the editor exists.
+      const cell = (event.target as HTMLElement | null)?.closest(`[${CELL_ATTRIBUTE}]`)
+      this.openEditor(cell ? Number(cell.getAttribute(CELL_ATTRIBUTE)) : null)
     })
   }
 
@@ -74,7 +80,7 @@ class RawLatexView implements NodeView {
     this.dom.textContent = source
   }
 
-  private openEditor(): void {
+  private openEditor(cellFrom: number | null = null): void {
     const source = (this.node.attrs.source as string) || ''
     // Structural markers have nothing to edit — see `render`.
     if (isStructuralSource(source)) return
@@ -99,7 +105,9 @@ class RawLatexView implements NodeView {
           ...handlers
         })
     this.dom.appendChild(this.editor.dom)
-    this.editor.focus()
+    const editor = this.editor
+    if (editor instanceof TabularEditor && cellFrom !== null && editor.openCell(cellFrom)) return
+    editor.focus()
   }
 
   /** Leave editing mode, writing `source` back when it changed. */

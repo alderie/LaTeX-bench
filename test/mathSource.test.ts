@@ -4,19 +4,20 @@ import {
   addRow,
   cellSpans,
   errorOffset,
-  fromCells,
-  gridRegion,
+  gridCells,
+  gridSpans,
   nextCell,
   parseMathShell,
   presentBody,
+  rewriteGrid,
   serializeMathShell,
   shellChoice,
   splitCells,
   splitRows,
   switchEnvironment,
   tidyErrorMessage,
-  toCells,
-  withLabelText
+  withLabelText,
+  writeCell
 } from '@renderer/editor/wysiwyg/math-source'
 
 // The formula editor shows the author their maths and nothing else — no
@@ -196,48 +197,118 @@ describe('KaTeX error messages', () => {
   })
 })
 
-describe('the grid as cells', () => {
-  // `\\` is a row break; in a JS string literal that is four backslashes.
-  const ROWS = 'a & b \\\\\nc & d'
+describe('the grids in a formula', () => {
+  const shellFor = (body: string): ReturnType<typeof parseMathShell> =>
+    parseMathShell(`\\[\n${body}\n\\]`)
 
-  it('finds the region inside a lone matrix environment', () => {
-    const body = '\\begin{pmatrix}\n  a & b \\\\\n  c & d\n\\end{pmatrix}'
-    const shell = parseMathShell(`\\[\n${body}\n\\]`)
-    const region = gridRegion(shell, body)
-    expect(region?.env).toBe('pmatrix')
-    expect(body.slice(region!.from, region!.to).trim()).toBe('a & b \\\\\n  c & d')
-  })
-
-  it('treats the whole body as the grid when the environment is one', () => {
-    const shell = parseMathShell('\\begin{align}\n  a &= b\n\\end{align}')
-    const region = gridRegion(shell, 'a &= b')
-    // The empty name is what tells the editor this is an `align`, not a matrix.
-    expect(region).toEqual({ from: 0, to: 'a &= b'.length, env: '' })
-  })
-
-  it('refuses a matrix buried in a larger expression', () => {
-    // There is no honest way to draw `A = …` as a table, so the source view
-    // stays; offering cells here would hide the `A =`.
+  it('finds a matrix buried in a larger expression', () => {
+    // The old cells view refused this — it only understood a body that was
+    // nothing but a matrix — which ruled out most matrices anyone writes.
     const body = 'A = \\begin{pmatrix} a & b \\end{pmatrix}'
-    expect(gridRegion(parseMathShell(`\\[${body}\\]`), body)).toBeNull()
+    const spans = gridSpans(shellFor(body), body)
+    expect(spans).toHaveLength(1)
+    expect(spans[0].env).toBe('pmatrix')
+    expect(body.slice(spans[0].from, spans[0].to)).toBe(' a & b ')
   })
 
-  it('squares off a ragged body so every row has the same width', () => {
-    expect(toCells('a & b \\\\\n c')).toEqual([
-      ['a', 'b'],
-      ['c', '']
+  it('finds every matrix, in the order they are drawn', () => {
+    const body = 'H = \\begin{pmatrix}2 & 1\\end{pmatrix}, \\quad H^{-1} = \\begin{pmatrix}3\\end{pmatrix}'
+    const spans = gridSpans(shellFor(body), body)
+    expect(spans.map((span) => body.slice(span.from, span.to))).toEqual(['2 & 1', '3'])
+  })
+
+  it('takes the whole body when the formula is itself a grid, outermost first', () => {
+    const body = 'a &= \\begin{cases} p \\\\ q \\end{cases}'
+    const shell = parseMathShell(`\\begin{align}\n${body}\n\\end{align}`)
+    const spans = gridSpans(shell, body)
+    expect(spans[0]).toEqual({ from: 0, to: body.length, env: '' })
+    expect(spans[1].env).toBe('cases')
+  })
+
+  it('keeps an environment argument out of the cells', () => {
+    const body = '\\begin{array}{cc} a & b \\end{array}'
+    const spans = gridSpans(shellFor(body), body)
+    expect(body.slice(spans[0].from, spans[0].to)).toBe(' a & b ')
+  })
+
+  it('counts \\substack as a grid, since that is what gets drawn', () => {
+    // Not for its own sake: a grid that isn't accounted for would make every
+    // later matrix in the formula trace back to the wrong source.
+    const body = '\\sum_{\\substack{i < j \\\\ k}} x'
+    expect(gridSpans(shellFor(body), body).map((span) => span.env)).toEqual(['substack'])
+  })
+})
+
+describe('a grid as offsets', () => {
+  const shellFor = (body: string): ReturnType<typeof parseMathShell> =>
+    parseMathShell(`\\[\n${body}\n\\]`)
+
+  const cellsOf = (body: string): Array<[number, number, string]> => {
+    const span = gridSpans(shellFor(body), body)[0]
+    return gridCells(body, span).map((cell) => [cell.row, cell.column, body.slice(cell.from, cell.to)])
+  }
+
+  it('gives each cell the span of its text, without the padding', () => {
+    expect(cellsOf('\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}')).toEqual([
+      [0, 0, 'a'],
+      [0, 1, 'b'],
+      [1, 0, 'c'],
+      [1, 1, 'd']
     ])
   })
 
   it('drops the empty row a trailing row break leaves behind', () => {
-    expect(toCells('a & b \\\\\n')).toEqual([['a', 'b']])
+    // KaTeX doesn't draw one either, and a cell with nothing drawn for it is
+    // a cell that can't be clicked.
+    expect(cellsOf('\\begin{pmatrix} a & b \\\\ \\end{pmatrix}')).toEqual([
+      [0, 0, 'a'],
+      [0, 1, 'b']
+    ])
   })
 
-  it('always yields one cell, so an empty grid still has something to click', () => {
-    expect(toCells('')).toEqual([['']])
+  it('leaves a short row short rather than padding it', () => {
+    expect(cellsOf('\\begin{pmatrix} a & b \\\\ c \\end{pmatrix}')).toEqual([
+      [0, 0, 'a'],
+      [0, 1, 'b'],
+      [1, 0, 'c']
+    ])
   })
 
-  it('round-trips a grid through cells', () => {
-    expect(fromCells(toCells(ROWS))).toBe(ROWS)
+  it('writes a cell back without touching anything else', () => {
+    const body = '\\begin{pmatrix} a & b \\end{pmatrix}'
+    const span = gridSpans(shellFor(body), body)[0]
+    const cell = gridCells(body, span)[1]
+    expect(writeCell(body, cell.from, cell.to, 'x^2').body).toBe(
+      '\\begin{pmatrix} a & x^2 \\end{pmatrix}'
+    )
+  })
+
+  it('keeps a space between a cell it fills and the separator', () => {
+    // `a &x& b` is valid and unreadable; the source is still something the
+    // author opens in another editor.
+    const body = 'a & & b'
+    const span = gridSpans(parseMathShell(`\\begin{align}\n${body}\n\\end{align}`), body)[0]
+    const empty = gridCells(body, span)[1]
+    const result = writeCell(body, empty.from, empty.to, 'z')
+    expect(result.body).toBe('a & z & b')
+  })
+
+  it('reports where what it wrote ends, so the next keystroke lands on it', () => {
+    // A cell is written on every keystroke; without this the second one
+    // would land beside the first instead of replacing it.
+    const body = 'a & b'
+    const span = gridSpans(parseMathShell(`\\begin{align}\n${body}\n\\end{align}`), body)[0]
+    const cell = gridCells(body, span)[1]
+    const first = writeCell(body, cell.from, cell.to, 'xy')
+    const second = writeCell(first.body, cell.from, first.to, 'xyz')
+    expect(second.body).toBe('a & xyz')
+  })
+
+  it('rewrites one grid and leaves the formula around it alone', () => {
+    const body = 'H = \\begin{pmatrix}2 & 1\\end{pmatrix} + \\begin{pmatrix}3 & 4\\end{pmatrix}'
+    const span = gridSpans(shellFor(body), body)[1]
+    expect(rewriteGrid(body, span, addColumn)).toBe(
+      'H = \\begin{pmatrix}2 & 1\\end{pmatrix} + \\begin{pmatrix}3 & 4 & \\end{pmatrix}'
+    )
   })
 })

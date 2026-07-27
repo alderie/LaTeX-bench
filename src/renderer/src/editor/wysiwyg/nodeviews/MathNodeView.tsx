@@ -194,8 +194,10 @@ function collectLabels(rawLatex: string, primary: unknown): string[] {
 /**
  * A labelled equation is one another part of the paper can point at, and
  * nothing in the rendered output says so — the number KaTeX prints is the
- * same one an unlabelled `equation` gets. The chip names it, quietly: dim
- * until the block is hovered, and out of the formula's way in the corner.
+ * same one an unlabelled `equation` gets. The chip names it, quietly: out of
+ * the formula's way in the corner, and shown only while the block is hovered,
+ * since a label is something you go looking for rather than something you
+ * read past. Its strip is reserved either way, so nothing moves.
  */
 function buildLabelChip(labels: string[]): HTMLElement {
   const chip = document.createElement('span')

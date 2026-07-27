@@ -1567,9 +1567,12 @@
 
 /* A labelled equation is one the rest of the paper can point at, but the
    rendered output looks identical to an unlabelled one. The chip names it in
-   the corner — dim enough to read past, legible when you look for it. The
-   strip it sits in is taken out of the block's top margin, so adding a label
-   doesn't shift the paragraph spacing around the formula. */
+   the corner — and only while the pointer is on the block, because a page of
+   numbered equations was otherwise a page with a second, dimmer column of
+   text running down the left of it, and the label is something you go looking
+   for rather than something you read. The strip it sits in is still taken out
+   of the block's top margin whether the chip is showing or not, so neither
+   adding a label nor hovering shifts the paragraph spacing. */
 .math-block--labelled {
   padding-top: 18px;
   margin-top: calc(1em - 12px);
@@ -1589,9 +1592,9 @@
   font-size: 10px;
   line-height: 12px;
   color: var(--text-tertiary);
-  opacity: 0.55;
+  opacity: 0;
   pointer-events: none;
-  transition: opacity 0.12s ease, color 0.12s ease;
+  transition: opacity 0.14s ease, color 0.12s ease;
 }
 .math-block:hover .math-block__label-chip {
   opacity: 1;
@@ -2109,14 +2112,26 @@
   background: var(--overlay-hover);
   border-color: var(--border-color);
 }
-/* The chevron is a hint that the word can be changed, not part of the word. */
+/* The chevron is a hint that the word can be changed, not part of the word —
+   so at rest it is not merely invisible, it is not there: fading it out on its
+   own left a chevron-shaped hole between "Theorem" and its number, which read
+   as a typo in the spacing. Width and the negative margin that swallows the
+   button's own flex gap animate together, so the hint slides out from under
+   the word rather than appearing beside it. */
 .wysiwyg-editor .ProseMirror .theorem-head__kind .ui-dropdown__button > svg:last-child {
   opacity: 0;
-  transition: opacity 0.12s ease;
+  width: 0;
+  margin-left: -0.25em;
+  transition: opacity 0.14s ease, width 0.16s ease, margin-left 0.16s ease,
+    transform 0.14s ease;
 }
-.wysiwyg-editor .ProseMirror aside[data-theorem]:hover .theorem-head__kind .ui-dropdown__button > svg:last-child,
+.wysiwyg-editor .ProseMirror .theorem-head:hover .theorem-head__kind .ui-dropdown__button > svg:last-child,
 .wysiwyg-editor .ProseMirror .theorem-head__kind.ui-dropdown--open .ui-dropdown__button > svg:last-child {
   opacity: 1;
+  /* Sized against the header rather than in pixels, like everything else in
+     this bar, so it keeps its proportions when the paper is zoomed. */
+  width: 1em;
+  margin-left: 0;
 }
 /* The number belongs to the kind, so it sits tight against it rather than a
    segment's width away. */
@@ -2137,19 +2152,44 @@
   margin: 0 0.35em;
   background: var(--border-color);
   opacity: 0.7;
+  transition: opacity 0.14s ease, width 0.16s ease, margin 0.16s ease;
+}
+/* The rule divides the kind from the name. With no name to divide it from it
+   is a hairline hanging off the end of the row, so it collapses with the
+   field it belongs to. */
+.wysiwyg-editor .ProseMirror .theorem-head:not(:hover):not(:focus-within):has(.theorem-head__name:not(.head-field--set)) .theorem-head__rule {
+  width: 0;
+  margin: 0;
+  opacity: 0;
 }
 .wysiwyg-editor .ProseMirror .theorem-head__spacer {
   flex: 1 1 1em;
 }
-/* An empty field is an offer, not a control, so it keeps its place in the row
-   and stays invisible until the pointer is on the theorem or the caret is in
-   it — the same rule the delete button follows. */
+/* An empty field is an offer, not a control. It used to hold its place in the
+   row while invisible, which meant a theorem that had never been named still
+   paid for the word NAME in blank space — a gap after the number that looked
+   like the header had lost something. So an empty field takes up no width
+   either: it opens out from the row when the pointer is on the header or the
+   caret is in it, and folds back when it isn't. `max-width` rather than
+   `width`, because the field measures its own content and there is no width
+   here to interpolate towards. */
 .wysiwyg-editor .ProseMirror .theorem-head .head-field:not(.head-field--set) {
   opacity: 0;
+  max-width: 0;
+  padding-left: 0;
+  padding-right: 0;
+  overflow: hidden;
 }
-.wysiwyg-editor .ProseMirror aside[data-theorem]:hover .theorem-head .head-field,
+.wysiwyg-editor .ProseMirror .theorem-head .head-field {
+  transition: opacity 0.14s ease, max-width 0.18s ease, padding 0.18s ease,
+    background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+.wysiwyg-editor .ProseMirror .theorem-head:hover .head-field,
 .wysiwyg-editor .ProseMirror .theorem-head .head-field:focus-within {
   opacity: 1;
+  max-width: 100%;
+  padding-left: 0.6em;
+  padding-right: 0.6em;
 }
 /* The name is the header's own text once it has one: the same size as the
    kind beside it, in the document's colour rather than the chrome's. */
@@ -2159,6 +2199,35 @@
 }
 .wysiwyg-editor .ProseMirror .theorem-head__name .head-field__input {
   color: var(--text-primary);
+}
+/* The label is not part of the sentence the header says. It is the name the
+   rest of the paper points at, in the same key as the chip on a labelled
+   equation: smaller, mono, tertiary, and gone until you look for it. Unlike
+   the name it hides even when it is set — a document full of theorems was a
+   document with `thm:…` running down its right margin, which is source, not
+   prose. It keeps its width while hidden: the spacer before it absorbs the
+   room, so nothing beside it moves when it fades in. */
+.wysiwyg-editor .ProseMirror .theorem-head__label {
+  opacity: 0;
+}
+.wysiwyg-editor .ProseMirror .theorem-head__label .head-field__caption,
+.wysiwyg-editor .ProseMirror .theorem-head__label .head-field__input,
+.wysiwyg-editor .ProseMirror .theorem-head__label .head-field__box::after {
+  font-size: 0.9em;
+  font-weight: 400;
+}
+.wysiwyg-editor .ProseMirror .theorem-head__label .head-field__input {
+  color: var(--text-tertiary);
+}
+.wysiwyg-editor .ProseMirror .theorem-head__label > svg {
+  opacity: 0.65;
+}
+/* Once the caret is in it, it is being edited like any other field. */
+.wysiwyg-editor .ProseMirror .theorem-head__label:focus-within .head-field__input {
+  color: var(--text-secondary);
+}
+.wysiwyg-editor .ProseMirror .theorem-head__label:focus-within > svg {
+  opacity: 1;
 }
 .wysiwyg-editor .ProseMirror .theorem-body > p:first-of-type { margin-top: 0; }
 .wysiwyg-editor .ProseMirror .theorem-body > p:last-of-type { margin-bottom: 0; }

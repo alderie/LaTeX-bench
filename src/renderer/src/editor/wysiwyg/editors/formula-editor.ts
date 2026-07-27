@@ -9,6 +9,7 @@ import {
   nextCell,
   parseMathShell,
   presentBody,
+  previewSource,
   rewriteGrid,
   serializeMathShell,
   shellChoice,
@@ -552,7 +553,7 @@ export class FormulaEditor {
     const source = this.field.value.trim()
     if (source === '') return
     try {
-      katex.render(this.renderable(), preview, {
+      katex.render(previewSource(this.shell, this.field.value), preview, {
         throwOnError: true,
         displayMode: true,
         strict: false,
@@ -564,17 +565,6 @@ export class FormulaEditor {
       preview.classList.add('math-preview--error')
       preview.appendChild(this.errorReport(err as Error))
     }
-  }
-
-  /**
-   * What to hand KaTeX: the body inside its real environment, so `align`
-   * previews as aligned rows rather than as one line, but without the
-   * numbering wrapper — the numbers come from the document, not from here.
-   */
-  private renderable(): string {
-    if (this.shell.kind !== 'env') return this.field.value
-    const env = `${this.shell.env}*`
-    return `\\begin{${env}}\n${this.field.value}\n\\end{${env}}`
   }
 
   /**

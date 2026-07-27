@@ -527,7 +527,7 @@ const ENV_ARGUMENTS = new Set(['array', 'alignat', 'alignedat'])
  */
 export function gridSpans(shell: MathShell, body: string): GridSpan[] {
   const spans: GridSpan[] = []
-  if (shell.kind === 'env' && GRID_ENVIRONMENTS.has(shell.env)) {
+  if (bodyIsGrid(shell)) {
     spans.push({ from: 0, to: body.length, env: '' })
   }
   // `\substack` is in here with the environments because KaTeX draws it as
@@ -618,6 +618,60 @@ function matchingEnd(body: string, env: string, from: number): number {
     depth--
   }
   return -1
+}
+
+// ── What the preview renders ───────────────────────────────────────────
+
+/**
+ * Environments the preview can hand to KaTeX as they are.
+ *
+ * Everything else — `multline`, `subequations`, a paper's own wrapper — is
+ * previewed as a bare body instead. Rendering `\begin{subequations}` would
+ * put "No such environment" where the maths should be, and the body inside
+ * it is the part the author is editing anyway.
+ */
+const PREVIEW_ENVIRONMENTS = new Set([...GRID_ENVIRONMENTS, 'equation'])
+
+/** Environments with a starred form, which is how the numbering comes off. */
+const STARRED_FORMS = new Set(['equation', 'align', 'gather', 'alignat'])
+
+/**
+ * What to hand KaTeX for a preview.
+ *
+ * The body inside its real environment, so an `align` previews as aligned
+ * rows rather than as one line — but unnumbered, since the numbers come from
+ * the document rather than from here. An environment with no starred form is
+ * reproduced verbatim, arguments and all: `\begin{array}{cc}` without its
+ * `{cc}` is not an `array`, and `\begin{split*}` is not anything.
+ */
+export function previewSource(shell: MathShell, body: string): string {
+  if (shell.kind !== 'env') return body
+  if (!PREVIEW_ENVIRONMENTS.has(shell.env)) return body
+  if (STARRED_FORMS.has(shell.env)) {
+    const env = `${shell.env}*`
+    const args = /\\begin\{[a-zA-Z]+\*?\}([\s\S]*)$/.exec(shell.before)?.[1] ?? ''
+    return `\\begin{${env}}${args}\n${body}\n\\end{${env}}`
+  }
+  return `${shell.before.trim()}\n${body}\n${shell.after.trim()}`
+}
+
+/**
+ * Whether the wrapper the preview adds is itself drawn as a table.
+ *
+ * KaTeX builds `equation` out of the same machinery as `align` — a table with
+ * one cell — so a formula in one renders with a table nobody asked for. What
+ * that costs is the trace from a rendered cell back to its source, which
+ * counts tables against the grids in the body: for every matrix inside an
+ * `\begin{equation}`, the counts disagreed by exactly one and the whole
+ * formula went uneditable.
+ */
+export function previewDrawsTable(shell: MathShell): boolean {
+  return shell.kind === 'env' && PREVIEW_ENVIRONMENTS.has(shell.env)
+}
+
+/** Whether `gridSpans` counts the body itself as one of the grids. */
+export function bodyIsGrid(shell: MathShell): boolean {
+  return shell.kind === 'env' && GRID_ENVIRONMENTS.has(shell.env)
 }
 
 export interface GridCell {

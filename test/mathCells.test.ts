@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import katex from 'katex'
 import { markMathCells } from '@renderer/editor/wysiwyg/renderers/math-cells'
-import { parseMathShell } from '@renderer/editor/wysiwyg/math-source'
+import { parseMathShell, previewSource } from '@renderer/editor/wysiwyg/math-source'
 
 // Tracing a rendered cell back to the characters it came from. This is what
 // makes the typeset formula in the editor an editing surface rather than a
@@ -25,7 +25,9 @@ function mark(
     : `\\[\n${body}\n\\]`
   const shell = parseMathShell(source)
   const host = document.createElement('div')
-  katex.render(options.wrapper ? `\\begin{${options.wrapper}*}${body}\\end{${options.wrapper}*}` : body, host, {
+  // Rendered exactly the way the editor renders its preview, since that is
+  // what the trace back to the source is pairing against.
+  katex.render(previewSource(shell, body), host, {
     displayMode: true,
     throwOnError: false,
     strict: false,
@@ -59,6 +61,28 @@ describe('cells in a rendered formula', () => {
     for (const cell of mark('\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}')) {
       expect(cell.drawn).toBe(cell.text)
     }
+  })
+
+  it('marks a matrix inside an equation, wrapper table and all', () => {
+    // The commonest formula there is, and the one this got wrong: KaTeX
+    // builds `equation` out of the same machinery as `align`, so the preview
+    // holds one more table than the body has grids — and every matrix in an
+    // `\begin{equation}` went uneditable.
+    const cells = mark('H = \\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}', {
+      wrapper: 'equation'
+    })
+    expect(cells.map((cell) => cell.text)).toEqual(['a', 'b', 'c', 'd'])
+    for (const cell of cells) expect(cell.drawn).toBe(cell.text)
+  })
+
+  it('marks the cells of a matrix that is the whole equation', () => {
+    const cells = mark('\\begin{pmatrix} 3 & \\\\ & \\end{pmatrix}', { wrapper: 'equation' })
+    expect(cells.map((cell) => [cell.row, cell.column, cell.text])).toEqual([
+      [0, 0, '3'],
+      [0, 1, ''],
+      [1, 0, ''],
+      [1, 1, '']
+    ])
   })
 
   it('handles a formula that holds more than one matrix', () => {

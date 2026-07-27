@@ -1,11 +1,28 @@
 import * as React from 'react'
 import { useEffect, useMemo, useState } from 'react'
 import { Command } from 'cmdk'
-import { Hash, FilePlus2, FileText, Play, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react'
+import {
+  Hash,
+  FilePlus2,
+  FileText,
+  Play,
+  ZoomIn,
+  ZoomOut,
+  RotateCcw,
+  Search,
+  Replace,
+  Map as MapIcon,
+  ChevronsDownUp,
+  ChevronsUpDown
+} from 'lucide-react'
+import { unfoldAll } from '@codemirror/language'
+import { EditorView } from '@codemirror/view'
 import { useUiStore } from '../stores/uiStore'
 import { useLibraryStore } from '../stores/libraryStore'
 import { usePaperStore } from '../stores/paperStore'
 import { extractSections, type SectionEntry } from '../editor/sections'
+import { getActiveSourceView } from '../editor/source/source-bridge'
+import { foldToLevel } from '../editor/source/fold-commands'
 
 const CommandRoot = Command as any
 const CommandInputC = (Command as any).Input
@@ -43,18 +60,38 @@ export function CommandPalette(): React.JSX.Element | null {
   const close = (): void => setOpen(false)
 
   const jumpToSection = (s: SectionItem): void => {
-    // Scroll the source editor's caret line — the editor reads paperStore.tex
-    // by reference so we just nudge the caret. For WYSIWYG we just close
-    // the palette; the section is already visible in the long doc.
     close()
+    // In the source view, move the actual caret. The previous version
+    // counted `.cm-line` elements in the DOM, which only works for sections
+    // that happen to be on screen already — CodeMirror renders the viewport,
+    // not the document, so jumping to section 14 of a long paper landed
+    // somewhere arbitrary or nowhere at all.
+    const view = getActiveSourceView()
+    if (view) {
+      const line = view.state.doc.line(Math.min(s.line + 1, view.state.doc.lines))
+      view.dispatch({
+        selection: { anchor: line.from },
+        effects: EditorView.scrollIntoView(line.from, { y: 'center' })
+      })
+      view.focus()
+      return
+    }
     setTimeout(() => {
       const cm = document.querySelector('.cm-content') as HTMLElement | null
       if (!cm) return
-      // Best-effort: find the line element and scroll to it.
       const lines = cm.querySelectorAll('.cm-line')
       const target = lines[s.line]
       if (target) (target as HTMLElement).scrollIntoView({ block: 'center' })
     }, 0)
+  }
+
+  /** Run a CodeMirror command from the palette, if the source view is up. */
+  const runInSource = (command: (view: EditorView) => boolean): void => {
+    close()
+    const view = getActiveSourceView()
+    if (!view) return
+    command(view)
+    view.focus()
   }
 
   const handleNewPaper = async (): Promise<void> => {
@@ -114,6 +151,62 @@ export function CommandPalette(): React.JSX.Element | null {
                   <span>{p.title}</span>
                 </CommandItemC>
               ))}
+            </CommandGroupC>
+
+            <CommandGroupC heading="Editor" className="command-palette__group">
+              <CommandItemC
+                value="find search"
+                onSelect={() => {
+                  close()
+                  useUiStore.getState().openFind()
+                }}
+                className="command-palette__item"
+              >
+                <Search size={14} />
+                <span>Find</span>
+                <span className="command-palette__shortcut">Ctrl/Cmd F</span>
+              </CommandItemC>
+              <CommandItemC
+                value="replace substitute find and replace"
+                onSelect={() => {
+                  close()
+                  useUiStore.getState().openFind(true)
+                }}
+                className="command-palette__item"
+              >
+                <Replace size={14} />
+                <span>Replace</span>
+                <span className="command-palette__shortcut">Ctrl/Cmd H</span>
+              </CommandItemC>
+              <CommandItemC
+                value="fold collapse sections outline"
+                onSelect={() => runInSource(foldToLevel(1))}
+                className="command-palette__item"
+              >
+                <ChevronsDownUp size={14} />
+                <span>Collapse to section headings</span>
+                <span className="command-palette__shortcut">Ctrl/Cmd K 1</span>
+              </CommandItemC>
+              <CommandItemC
+                value="unfold expand all sections"
+                onSelect={() => runInSource(unfoldAll)}
+                className="command-palette__item"
+              >
+                <ChevronsUpDown size={14} />
+                <span>Expand everything</span>
+                <span className="command-palette__shortcut">Ctrl/Cmd K J</span>
+              </CommandItemC>
+              <CommandItemC
+                value="minimap toggle overview"
+                onSelect={() => {
+                  close()
+                  useUiStore.getState().toggleMinimap()
+                }}
+                className="command-palette__item"
+              >
+                <MapIcon size={14} />
+                <span>Toggle minimap</span>
+              </CommandItemC>
             </CommandGroupC>
 
             <CommandGroupC heading="View" className="command-palette__group">

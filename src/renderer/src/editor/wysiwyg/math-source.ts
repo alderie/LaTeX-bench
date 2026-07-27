@@ -68,21 +68,35 @@ export const ENV_CHOICES: Array<{
 
 const SWITCHABLE = new Set(ENV_CHOICES.map((c) => c.value))
 
-/** Environments laid out as a grid, where `&` and `\\` mean something. */
+/**
+ * Environments laid out as a grid, where `&` and `\\` mean something.
+ *
+ * This doubles as the list of things KaTeX draws as a table, which is what
+ * lets a rendered cell be traced back to its source (see `gridSpans`) — so
+ * the near-duplicates matter: `dcases` and `rcases` are grids as much as
+ * `cases` is, and leaving one out means a formula containing it offers no
+ * clickable cells at all.
+ */
 export const GRID_ENVIRONMENTS = new Set([
   'align',
   'aligned',
   'alignat',
+  'alignedat',
   'array',
   'bmatrix',
   'Bmatrix',
   'cases',
+  'darray',
+  'dcases',
+  'drcases',
   'gather',
   'gathered',
   'matrix',
   'pmatrix',
+  'rcases',
   'smallmatrix',
   'split',
+  'subarray',
   'vmatrix',
   'Vmatrix'
 ])
@@ -482,74 +496,208 @@ export function gridSize(body: string): { rows: number; columns: number } {
   }
 }
 
-/**
- * Whether the formula is grid-shaped — either because its environment is one
- * or because the body contains a matrix. Drives whether the editor shows
- * row/column buttons at all.
- */
-export function isGridBody(shell: MathShell, body = shell.body): boolean {
-  if (shell.kind === 'env' && GRID_ENVIRONMENTS.has(shell.env)) return true
-  return /\\begin\{[a-zA-Z]*matrix\*?\}|\\begin\{(cases|array|aligned|split)\}/.test(body)
-}
-
-// ── The grid as cells ──────────────────────────────────────────────────
+// ── The grids in a body ────────────────────────────────────────────────
 
 /**
- * The span of the body that can be edited cell-by-cell, if there is one.
+ * A grid inside the body, as offsets into it.
  *
- * Two cases qualify. Either the formula's own environment is a grid, so the
- * whole body is the table (`align`, `gather`); or the body is nothing but one
- * matrix-ish environment, in which case the editable part is what sits between
- * its `\begin` and `\end`. A matrix buried inside a larger expression is
- * deliberately excluded — there is no honest way to show `A = \begin{pmatrix}…`
- * as a table without hiding the `A =`.
+ * There can be several: `H = \begin{pmatrix}…\end{pmatrix}, H^{-1} =
+ * \frac{1}{3}\begin{pmatrix}…\end{pmatrix}` is two, and an `align` whose rows
+ * contain a `cases` is two more. The editor pairs these with what KaTeX drew,
+ * so *which* offsets are which matters: the list is in the order KaTeX lays
+ * the grids out, which is the order their `\begin`s appear.
  */
-export interface GridRegion {
+export interface GridSpan {
+  /** Offsets of the grid's own body within the formula body. */
   from: number
   to: number
-  /** Environment name, or '' when the shell itself is the grid. */
+  /** Environment name, or '' when the formula's own environment is the grid. */
   env: string
 }
 
-// Grouped so the prefix's own length gives the body's offset — searching for
-// the body text inside the match would misfire whenever the body is empty.
-const LONE_GRID_RE =
-  /^(\s*\\begin\{([a-zA-Z]+)(\*?)\}((?:[ \t]*(?:\[[^\]]*\]|\{[^}]*\}))*))([\s\S]*?)\\end\{\2\*?\}\s*$/
+/** Environments whose brace group after `\begin` is an argument, not a cell. */
+const ENV_ARGUMENTS = new Set(['array', 'alignat', 'alignedat'])
 
-export function gridRegion(shell: MathShell, body: string): GridRegion | null {
-  const lone = LONE_GRID_RE.exec(body)
-  if (lone && GRID_ENVIRONMENTS.has(lone[2])) {
-    const from = lone[1].length
-    return { from, to: from + lone[5].length, env: lone[2] }
-  }
+/**
+ * Every grid in the body, outermost first and otherwise in source order.
+ *
+ * That ordering is not incidental: it is the order the same grids appear in
+ * KaTeX's output, which is what lets a rendered cell be traced back to the
+ * characters it came from without KaTeX telling us anything.
+ */
+export function gridSpans(shell: MathShell, body: string): GridSpan[] {
+  const spans: GridSpan[] = []
   if (shell.kind === 'env' && GRID_ENVIRONMENTS.has(shell.env)) {
-    return { from: 0, to: body.length, env: '' }
+    spans.push({ from: 0, to: body.length, env: '' })
   }
-  return null
+  // `\substack` is in here with the environments because KaTeX draws it as
+  // one more table, and a grid the editor can't account for is a grid whose
+  // cells would be mapped onto the wrong source (see `markMathCells`).
+  const opener = /\\begin\{([a-zA-Z]+)\*?\}|\\substack\s*\{/g
+  let match: RegExpExecArray | null
+  while ((match = opener.exec(body)) !== null) {
+    const env = match[1] ?? 'substack'
+    if (env === 'substack') {
+      const from = match.index + match[0].length
+      const to = closingBrace(body, from)
+      if (to !== -1) spans.push({ from, to, env })
+      continue
+    }
+    if (!GRID_ENVIRONMENTS.has(env)) continue
+    const from = ENV_ARGUMENTS.has(env)
+      ? skipArguments(body, match.index + match[0].length)
+      : match.index + match[0].length
+    const to = matchingEnd(body, env, from)
+    if (to === -1) continue
+    spans.push({ from, to, env })
+  }
+  return spans
+}
+
+/** Where the brace group opened just before `from` closes, or -1. */
+function closingBrace(body: string, from: number): number {
+  let depth = 1
+  for (let i = from; i < body.length; i++) {
+    if (body[i] === '\\') {
+      i++
+      continue
+    }
+    if (body[i] === '{') depth++
+    else if (body[i] === '}' && --depth === 0) return i
+  }
+  return -1
 }
 
 /**
- * A grid body as a rectangle of cell texts.
+ * Past the `{cc}` of an `array` or the `{2}` of an `alignat`.
  *
- * Short rows are padded so the caller can index `cells[row][column]` without
- * checking, and a body that is entirely blank still yields one empty cell —
- * an editor with nothing to click would be a dead end.
+ * Stops at the end of the last argument rather than at the first character
+ * of the body: the space between them is the author's, and a cell's offsets
+ * are meant to be exactly where its text is.
  */
-export function toCells(body: string): string[][] {
-  const rows = splitRows(body).map((row) => splitCells(row).map((cell) => cell.trim()))
-  // A trailing `\\` leaves an empty final row that is punctuation, not content.
-  while (rows.length > 1 && rows[rows.length - 1].every((cell) => cell === '')) rows.pop()
-  const width = Math.max(1, ...rows.map((row) => row.length))
-  return rows.map((row) => {
-    const padded = row.slice()
-    while (padded.length < width) padded.push('')
-    return padded
-  })
+function skipArguments(body: string, at: number): number {
+  let i = at
+  while (i < body.length) {
+    let scan = i
+    while (scan < body.length && /[ \t]/.test(body[scan])) scan++
+    const open = body[scan]
+    if (open !== '{' && open !== '[') return i
+    i = scan
+    const close = open === '{' ? '}' : ']'
+    let depth = 0
+    let j = i
+    for (; j < body.length; j++) {
+      if (body[j] === '\\') {
+        j++
+        continue
+      }
+      if (body[j] === open) depth++
+      else if (body[j] === close) {
+        depth--
+        if (depth === 0) break
+      }
+    }
+    if (j >= body.length) return i
+    i = j + 1
+  }
+  return i
 }
 
-/** Serialize a rectangle of cells back into a grid body. */
-export function fromCells(cells: string[][]): string {
-  return cells.map((row) => row.map((cell) => cell.trim()).join(' & ')).join(' \\\\\n')
+/** Where `\end{env}` closing the `\begin` at `from` starts, or -1. */
+function matchingEnd(body: string, env: string, from: number): number {
+  const marker = new RegExp(`\\\\(begin|end)\\{${env}\\*?\\}`, 'g')
+  marker.lastIndex = from
+  let depth = 0
+  let match: RegExpExecArray | null
+  while ((match = marker.exec(body)) !== null) {
+    if (match[1] === 'begin') {
+      depth++
+      continue
+    }
+    if (depth === 0) return match.index
+    depth--
+  }
+  return -1
+}
+
+export interface GridCell {
+  row: number
+  column: number
+  /** Offsets of the cell's text within the formula body, trimmed. */
+  from: number
+  to: number
+}
+
+/**
+ * The cells of one grid, as offsets rather than as text.
+ *
+ * Offsets because the point is to edit one cell and leave the rest of the
+ * formula exactly as the author typed it — reprinting a parsed grid would
+ * reformat every cell in it, and a reformatted formula is a diff in the
+ * saved `.tex` nobody asked for.
+ *
+ * The trailing empty row a body ending in `\\` leaves behind is dropped, for
+ * the same reason KaTeX doesn't draw it: it is punctuation, not a row. A
+ * blank row that carries its own `&` is a different thing — a row of empty
+ * cells, which is exactly what adding a row makes — and KaTeX draws that.
+ */
+export function gridCells(body: string, span: GridSpan): GridCell[] {
+  const grid = body.slice(span.from, span.to)
+  const spans = cellSpans(grid)
+  const lastRow = spans[spans.length - 1].row
+  const trailing = spans.filter((cell) => cell.row === lastRow)
+  const trailingBlank =
+    lastRow > 0 &&
+    trailing.length === 1 &&
+    grid.slice(trailing[0].from, trailing[0].to).trim() === ''
+
+  const cells: GridCell[] = []
+  for (const cell of spans) {
+    if (trailingBlank && cell.row === lastRow) continue
+    const text = grid.slice(cell.from, cell.to)
+    const lead = text.length - text.trimStart().length
+    const from = span.from + cell.from + lead
+    cells.push({
+      row: cell.row,
+      column: cell.column,
+      from,
+      to: Math.max(from, span.from + cell.to - (text.length - text.trimEnd().length))
+    })
+  }
+  return cells
+}
+
+/**
+ * Write a cell's new text back into the body.
+ *
+ * The space either side of an `&` is doing typographic nothing and editorial
+ * everything — it is what makes the source readable as a grid — so a cell
+ * that was empty gets one back rather than being written flush against the
+ * separator. Returns the end offset of what was written, so a caller editing
+ * the same cell keystroke by keystroke can keep its span current.
+ */
+export function writeCell(
+  body: string,
+  from: number,
+  to: number,
+  text: string
+): { body: string; to: number } {
+  const before = body.slice(0, from)
+  const after = body.slice(to)
+  const value = text.trim()
+  const lead = value !== '' && /[&\\]$/.test(before) ? ' ' : ''
+  const trail = value !== '' && /^(&|\\\\)/.test(after) ? ' ' : ''
+  const written = `${lead}${value}${trail}`
+  return { body: before + written + after, to: from + written.length }
+}
+
+/** Rewrite one grid in place, leaving the rest of the formula alone. */
+export function rewriteGrid(
+  body: string,
+  span: GridSpan,
+  transform: (grid: string) => string
+): string {
+  return body.slice(0, span.from) + transform(body.slice(span.from, span.to)) + body.slice(span.to)
 }
 
 // ── Errors ─────────────────────────────────────────────────────────────

@@ -1063,6 +1063,17 @@
   background: transparent;
   font-family: var(--font-sans);
   font-size: 11px;
+  /* One line box for everything on the bar.
+     `align-items: center` centres each control's *box*, which is not the same
+     as putting their text on one line: a 10px note in Inter and an 11px name
+     in Geist Mono centred in boxes of their own natural height sit on three
+     different baselines, and a row of captions a pixel apart reads as sloppy
+     even when nobody can say why. Fixing the line box makes every text run in
+     here — whatever its size or family — centre on the same one. */
+  line-height: 16px;
+  /* Including inside a header field, whose own default line box belongs to
+     the theorem header it was generalised for. */
+  --head-field-line: 16px;
   color: var(--text-secondary);
   overflow: visible;
 }
@@ -1081,8 +1092,63 @@
   font-family: var(--font-mono);
   color: var(--text-tertiary);
 }
+/* The table's shape: a measurement to read, and — on a double-click — the
+   shortest way to say what it should be instead. It stays a caption until
+   then; chrome around it would make the bar look like it holds two fields
+   when it holds one field and a number. */
+.block-editor__shape {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.block-editor__shape--empty {
+  display: none;
+}
+.block-editor__shape-note {
+  cursor: text;
+  padding: 0 2px;
+  border-radius: 3px;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.block-editor__shape-note:hover {
+  background: var(--overlay-hover);
+  color: var(--text-secondary);
+}
+.block-editor__shape-fields {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.block-editor__shape-fields[hidden] {
+  display: none;
+}
+.block-editor__shape-input {
+  width: 3ch;
+  margin: 0;
+  padding: 0 2px;
+  border: 1px solid var(--math-edit);
+  border-radius: 3px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  outline: none;
+  caret-color: var(--math-edit);
+}
+.block-editor__shape-input:focus {
+  box-shadow: 0 0 0 2px var(--math-edit-ring);
+}
+.block-editor__shape-times {
+  color: var(--text-tertiary);
+}
+
 /* A measurement the author didn't ask for but wants while they're here —
-   the table's shape, the preamble's length. Quieter than the name. */
+   the preamble's length, a warning. Quieter than the name. */
 .block-editor__note {
   font-family: var(--font-sans);
   font-size: 10px;
@@ -1126,7 +1192,7 @@
 }
 /* The icon, the caption and the field all carry different font metrics, so
    centring the flex boxes alone leaves the text visibly stepped. Give each one
-   the same line box and let align-items do the rest. */
+   the bar's line box and let align-items do the rest. */
 .block-editor__label > svg {
   display: block;
   flex: none;
@@ -1201,7 +1267,7 @@
   font-family: var(--font-sans);
   font-size: 0.9em;
   font-weight: 600;
-  line-height: 1.45em;
+  line-height: var(--head-field-line, 1.45em);
   letter-spacing: 0.05em;
   text-transform: uppercase;
   white-space: nowrap;
@@ -1232,7 +1298,11 @@
   font-family: var(--font-sans);
   font-size: 1.05em;
   font-weight: 500;
-  line-height: 1.4em;
+  /* One line box for the caption, the value and the invisible copy that
+     measures it, so a field's text doesn't move as it fills. What the line
+     box *is* belongs to the header the field sits in — see
+     `.block-editor__bar`, which sets the same one for everything on it. */
+  line-height: var(--head-field-line, 1.45em);
   letter-spacing: normal;
   text-transform: none;
 }
@@ -1250,6 +1320,14 @@
   overflow: hidden;
 }
 .head-field__input {
+  /* The invisible copy of the value is what sizes the grid's one column, and
+     without this the input brings its own opinion: an `<input>` with no width
+     is twenty characters wide whatever it holds, so `@{}lrrr@{}` reserved
+     three times its own width and left a hole between the field and whatever
+     came after it on the bar. Zero width is what keeps the input out of the
+     column's measurement; the minimum is what then fills it. */
+  width: 0;
+  min-width: 100%;
   margin: 0;
   border: 0;
   outline: none;
@@ -1263,21 +1341,6 @@
   opacity: 0.7;
 }
 
-.block-editor__grid {
-  display: inline-flex;
-  gap: 3px;
-}
-/* Row/column controls mean nothing outside a grid, but hiding them
-   entirely makes the bar jump every time a matrix is typed or deleted. */
-.block-editor__grid--off {
-  opacity: 0.3;
-  pointer-events: none;
-}
-/* In the cells view they're genuinely gone, not just inert — the dashed edge
-   does the same job, and two ways to grow the same grid is one too many. */
-.block-editor__grid--hidden {
-  display: none;
-}
 .block-editor__button {
   display: inline-flex;
   align-items: center;
@@ -1325,66 +1388,91 @@
   color: var(--text-tertiary);
   white-space: nowrap;
 }
-.code-field--hidden {
-  display: none;
+
+/* ── Cells in the rendering ──────────────────────────────────────────
+   The typeset formula and the rendered table are the editing surface: a
+   cell is clicked and a small LaTeX field opens over it.
+
+   The hover affordance is paint and nothing else. KaTeX has already decided
+   where every glyph of a matrix goes, so anything that occupies space — a
+   border, padding — would shift the maths as the pointer crossed it. A
+   `box-shadow` occupies none. */
+.source-cell {
+  /* Not decoration: KaTeX stacks a matrix's rows inside one table cell, and
+     without a stacking context of its own every row below the first loses
+     the pointer to that container — nothing to hover, nothing to click. The
+     offsets are none, so the maths does not move. */
+  position: relative;
+  z-index: 1;
+  cursor: text;
+  border-radius: 3px;
+  transition: background 0.1s ease, box-shadow 0.1s ease;
+}
+.source-cell:hover {
+  background: var(--math-edit-soft);
+  box-shadow: 0 0 0 3px var(--math-edit-soft);
+}
+/* An empty cell is drawn as nothing at all, which is nothing to aim at. The
+   rule is scoped to spans: a `<td>` already has the width of its column, and
+   `display: inline-block` on one would take the table apart. */
+span.source-cell--empty {
+  display: inline-block;
+  min-width: 1.1em;
+  min-height: 1em;
+  /* The same dashed placeholder a table's empty cells get, so "nothing here
+     yet, click it" looks the same in a matrix as in a table. */
+  border: 1px dashed color-mix(in srgb, var(--text-tertiary) 45%, transparent);
+  border-radius: 3px;
+}
+span.source-cell--empty:hover {
+  border-color: var(--math-edit);
+}
+/* A table's empty cells say so with a placeholder instead, since a `<td>`
+   holding nothing collapses its whole row — a table resized from 2×3 to 4×5
+   showed two rows and a gap. Only inside an editor: an empty cell in the
+   document is an empty cell, not an invitation. */
+.block-editor__preview .cell-blank {
+  display: inline-block;
+  min-width: 2.4em;
+  height: 1.05em;
+  vertical-align: middle;
+  border: 1px dashed color-mix(in srgb, var(--text-tertiary) 45%, transparent);
+  border-radius: 3px;
+}
+.block-editor__preview td:hover .cell-blank {
+  border-color: var(--math-edit);
+}
+/* Under the open field, so the two don't show through each other. Faded for
+   a span; tinted for a `<td>`, whose opacity would take its share of the
+   table's rules with it. */
+.source-cell--editing,
+.source-cell--editing:hover {
+  background: transparent;
+  box-shadow: none;
+}
+span.source-cell--editing {
+  opacity: 0.25;
+}
+td.source-cell--editing,
+td.source-cell--editing:hover {
+  background: var(--math-edit-soft);
 }
 
-/* ── Matrix cells ────────────────────────────────────────────────────
-   A grid body edited as a grid. The dashed tracks on all four sides are
-   the way to grow it: type in one and it becomes a real row or column. */
-.block-editor__grid-host {
-  padding: 6px 16px 14px;
-  overflow-x: auto;
-}
-.matrix-grid {
-  display: inline-grid;
-  gap: 3px;
-  align-items: center;
-  justify-items: stretch;
-}
-.matrix-grid__corner {
-  /* Where a ghost row crosses a ghost column there's nothing to add. */
-  display: block;
-}
-.matrix-grid__cell {
-  min-width: 40px;
-  height: 30px;
-  padding: 0 8px;
-  border: 1px solid var(--border-color);
-  border-radius: 5px;
+/* The field itself: over the cell, sized to what's in it, and ringed so it
+   reads as the thing holding the keyboard. */
+.cell-editor.code-field {
+  position: absolute;
+  z-index: 4;
+  --code-field-padding: 2px 6px;
+  font-size: 12px;
+  line-height: 1.5;
   background: var(--bg-primary);
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  text-align: center;
-  outline: none;
-  transition: border-color 0.12s ease, background 0.12s ease;
+  border: 1px solid var(--math-edit);
+  border-radius: 4px;
+  box-shadow: 0 0 0 3px var(--math-edit-ring), 0 6px 18px rgba(0, 0, 0, 0.24);
 }
-.matrix-grid__cell:hover {
-  border-color: var(--text-tertiary);
-}
-.matrix-grid__cell:focus {
-  border-color: var(--accent-color);
-  background: var(--bg-primary);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color) 18%, transparent);
-}
-/* The placeholders read as absences: dashed, no fill, and faint until the
-   pointer is over them — present enough to invite a click, quiet enough that
-   a 2×2 matrix still looks like a 2×2 matrix. */
-.matrix-grid__cell--ghost {
-  border-style: dashed;
-  border-color: color-mix(in srgb, var(--border-color) 70%, transparent);
-  background: transparent;
-  opacity: 0.55;
-  transition: opacity 0.12s ease, border-color 0.12s ease;
-}
-.matrix-grid:hover .matrix-grid__cell--ghost {
-  opacity: 0.85;
-}
-.matrix-grid__cell--ghost:hover,
-.matrix-grid__cell--ghost:focus {
-  opacity: 1;
-  border-color: var(--text-tertiary);
+.cell-editor .code-field__input {
+  min-width: 28px;
 }
 /* The source is the thing being worked on, so it gets the room: generous
    padding, a slightly larger face than the surrounding prose's monospace,
@@ -1400,6 +1488,7 @@
    table. Separated from the source by the faintest thing that still reads
    as a separation, so the eye goes to the content, not the joinery. */
 .block-editor__preview {
+  position: relative;
   padding: 14px 16px;
   border-top: 1px solid var(--border-subtle, var(--border-color));
   background: transparent;
@@ -1808,9 +1897,6 @@
   font-family: var(--font-mono);
   font-size: 0.92em;
   line-height: 1.5;
-}
-.code-field--hidden {
-  display: none;
 }
 .code-field__highlight,
 .code-field__input {

@@ -1,4 +1,5 @@
 import { renderInlineLatex } from './inline-render'
+import { markCell, type CellSite } from '../editors/cell-editor'
 
 // Tabular-like environments we can lay out as a real HTML table.
 const TABULAR_ENVS = ['tabular', 'tabular*', 'tabularx', 'longtable', 'array']
@@ -15,10 +16,17 @@ export interface TabularSource {
   prefix: string
   /** Everything after it, verbatim. */
   suffix: string
+  /**
+   * Where the body starts in the string that was passed in — including any
+   * whitespace trimmed off the front of it. Cells are located by offset so
+   * that editing one leaves every other byte of the table alone.
+   */
+  bodyFrom: number
 }
 
 export function splitTabularSource(source: string): TabularSource | null {
   const text = source.trim()
+  const lead = source.length - source.trimStart().length
   const open = /^\\begin\{([A-Za-z]+\*?)\}/.exec(text)
   if (!open || !TABULAR_ENVS.includes(open[1])) return null
   const env = open[1]
@@ -63,7 +71,8 @@ export function splitTabularSource(source: string): TabularSource | null {
     colSpec: groups.length > 0 ? groups[groups.length - 1] : '',
     body: text.slice(i, text.length - close.length),
     prefix: text.slice(0, i),
-    suffix: close
+    suffix: close,
+    bodyFrom: lead + i
   }
 }
 
@@ -76,6 +85,21 @@ interface Cell {
   span: number
   rowSpan: number
   align: Align
+  /**
+   * Offsets of the cell's editable text in the source — the argument of a
+   * `\multicolumn`, not the macro around it. What makes clicking a rendered
+   * cell an edit to the table rather than a re-print of it.
+   */
+  from: number
+  to: number
+  /** The cell's place in its row, kept because `rowspan` removes some. */
+  column: number
+}
+
+/** A stretch of the source, so what was parsed can be found again. */
+interface Segment {
+  text: string
+  from: number
 }
 type Align = 'l' | 'c' | 'r'
 interface CmidRule {
@@ -98,8 +122,8 @@ interface ParsedTabular {
 }
 
 // Brace-depth-aware splitter on a literal two-character `\\` row separator.
-function splitRows(body: string): string[] {
-  const out: string[] = []
+function splitRows(body: string): Segment[] {
+  const out: Segment[] = []
   let depth = 0
   let last = 0
   let i = 0
@@ -107,7 +131,7 @@ function splitRows(body: string): string[] {
     const c = body[i]
     if (c === '\\') {
       if (body[i + 1] === '\\' && depth === 0) {
-        out.push(body.slice(last, i))
+        out.push({ text: body.slice(last, i), from: last })
         i += 2
         // Skip optional `[Npt]` spacing arg after `\\`.
         while (i < body.length && /\s/.test(body[i])) i++
@@ -129,13 +153,13 @@ function splitRows(body: string): string[] {
     else if (c === '}') depth--
     i++
   }
-  out.push(body.slice(last))
+  out.push({ text: body.slice(last), from: last })
   return out
 }
 
 // Brace-depth-aware splitter on `&` for cell separation.
-function splitCells(rowText: string): string[] {
-  const out: string[] = []
+function splitCells(rowText: string): Segment[] {
+  const out: Segment[] = []
   let depth = 0
   let last = 0
   let i = 0
@@ -148,12 +172,12 @@ function splitCells(rowText: string): string[] {
     if (c === '{') depth++
     else if (c === '}') depth--
     else if (c === '&' && depth === 0) {
-      out.push(rowText.slice(last, i))
+      out.push({ text: rowText.slice(last, i), from: last })
       last = i + 1
     }
     i++
   }
-  out.push(rowText.slice(last))
+  out.push({ text: rowText.slice(last), from: last })
   return out
 }
 
@@ -163,6 +187,8 @@ export function consumeLeadingRules(s: string): {
   rule?: 'top' | 'mid' | 'bottom'
   cmids: CmidRule[]
   rest: string
+  /** Where `rest` starts in `s`, so the cells after it can be located. */
+  at: number
 } {
   const cmids: CmidRule[] = []
   let rule: 'top' | 'mid' | 'bottom' | undefined
@@ -204,7 +230,7 @@ export function consumeLeadingRules(s: string): {
     }
     break
   }
-  return { rule, cmids, rest }
+  return { rule, cmids, rest, at: s.length - rest.length }
 }
 
 function parseColSpec(spec: string): Align[] {
@@ -241,9 +267,15 @@ function parseColSpec(spec: string): Align[] {
 // the two cell macros that carry their payload in a trailing brace group.
 // Left unparsed, the whole macro used to render as literal text: a header
 // cell reading "2*Method" instead of "Method".
-function parseSpanningCell(
-  cellText: string
-): { span: number; rowSpan: number; align: Align | null; content: string } | null {
+function parseSpanningCell(cellText: string): {
+  span: number
+  rowSpan: number
+  align: Align | null
+  content: string
+  /** Offsets of the content argument within `cellText`. */
+  from: number
+  to: number
+} | null {
   const mc = /^\s*\\multicolumn\{(\d+)\}\{([^}]*)\}\{/.exec(cellText)
   const mr = /^\s*\\multirow\*?(?:\[[^\]]*\])?\{(\d+)\}(?:\[[^\]]*\])?\{[^{}]*\}(?:\[[^\]]*\])?\{/.exec(
     cellText
@@ -275,12 +307,25 @@ function parseSpanningCell(
     else if (c === '}') {
       depth--
       if (depth === 0) {
-        return { span, rowSpan, align, content: cellText.slice(contentStart, i) }
+        return {
+          span,
+          rowSpan,
+          align,
+          content: cellText.slice(contentStart, i),
+          from: contentStart,
+          to: i
+        }
       }
     }
     i++
   }
   return null
+}
+
+/** A cell's text without the padding around it, as offsets in the source. */
+function trimmedSpan(text: string, at: number): { from: number; to: number } {
+  const from = at + (text.length - text.trimStart().length)
+  return { from, to: Math.max(from, at + text.trimEnd().length) }
 }
 
 function parseTabular(source: string): ParsedTabular | null {
@@ -296,7 +341,8 @@ function parseTabular(source: string): ParsedTabular | null {
   let bottomCmids: CmidRule[] = []
 
   for (let idx = 0; idx < rowSegs.length; idx++) {
-    const { rule, cmids, rest } = consumeLeadingRules(rowSegs[idx])
+    const segment = rowSegs[idx]
+    const { rule, cmids, rest, at } = consumeLeadingRules(segment.text)
     if (rule) pendingRule = rule
     if (cmids.length) pendingCmids = pendingCmids.concat(cmids)
 
@@ -312,21 +358,33 @@ function parseTabular(source: string): ParsedTabular | null {
       continue
     }
 
-    const cellTexts = splitCells(rest)
-    const cells: Cell[] = cellTexts.map((t, i) => {
+    // Where this row's text sits in the source the caller passed in, which is
+    // what every cell's offsets are measured against.
+    const rowFrom = split.bodyFrom + segment.from + at
+    const cells: Cell[] = splitCells(rest).map((cellSeg, i) => {
       // Default align: explicit colspec wins; otherwise left for the first
       // column, centre for subsequent columns (a typical results table).
       const fallback: Align = i === 0 ? 'l' : 'c'
-      const spanning = parseSpanningCell(t)
+      const at = rowFrom + cellSeg.from
+      const spanning = parseSpanningCell(cellSeg.text)
       if (spanning) {
         return {
           content: spanning.content.trim(),
           span: spanning.span,
           rowSpan: spanning.rowSpan,
-          align: spanning.align ?? colSpec[i] ?? fallback
+          align: spanning.align ?? colSpec[i] ?? fallback,
+          ...trimmedSpan(spanning.content, at + spanning.from),
+          column: i
         }
       }
-      return { content: t.trim(), span: 1, rowSpan: 1, align: colSpec[i] ?? fallback }
+      return {
+        content: cellSeg.text.trim(),
+        span: 1,
+        rowSpan: 1,
+        align: colSpec[i] ?? fallback,
+        ...trimmedSpan(cellSeg.text, at),
+        column: i
+      }
     })
     rows.push({
       cells,
@@ -371,13 +429,36 @@ function parseTabular(source: string): ParsedTabular | null {
   return { rows, bottomRule, bottomCmids, numCols, colSpec }
 }
 
+/** Where a cell with nothing in it is, for a surface that wants to show it. */
+function blankMarker(): HTMLElement {
+  const marker = document.createElement('span')
+  marker.className = 'cell-blank'
+  return marker
+}
+
+export interface TabularRendering {
+  dom: HTMLElement
+  /** Every cell, tagged with the source it came from — see `CellEditor`. */
+  cells: CellSite[]
+}
+
 export function renderTabular(source: string): HTMLElement {
+  return renderEditableTabular(source).dom
+}
+
+/**
+ * The table, with each `<td>` carrying the offsets of the cell it was drawn
+ * from. The document's own tables are rendered by this too — a `data-` pair
+ * on a cell costs nothing until an editor picks it up.
+ */
+export function renderEditableTabular(source: string): TabularRendering {
   const wrapper = document.createElement('div')
   wrapper.className = 'tabular-block-wrapper'
+  const cells: CellSite[] = []
   const parsed = parseTabular(source)
   if (!parsed) {
     wrapper.textContent = source
-    return wrapper
+    return { dom: wrapper, cells }
   }
   const table = document.createElement('table')
   table.className = 'tabular-block'
@@ -411,6 +492,14 @@ export function renderTabular(source: string): HTMLElement {
       }
       if (coveredByCmid) td.classList.add('tabular-block__cell--cmid')
       td.appendChild(renderInlineLatex(cell.content))
+      // An empty cell draws nothing, which in a rendering that can be edited
+      // is nothing to aim at — a table resized from 2×3 to 4×5 would show two
+      // rows and a gap. The marker is inert until an editor's CSS gives it a
+      // size; in the document, an empty cell stays empty.
+      if (cell.content === '') td.appendChild(blankMarker())
+      cells.push(
+        markCell(td, { grid: 0, row: r, column: cell.column, from: cell.from, to: cell.to })
+      )
       tr.appendChild(td)
       colCursor += cell.span
     }
@@ -422,5 +511,5 @@ export function renderTabular(source: string): HTMLElement {
   }
 
   wrapper.appendChild(table)
-  return wrapper
+  return { dom: wrapper, cells }
 }

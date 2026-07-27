@@ -144,33 +144,187 @@ describe('formula editor', () => {
       expect(field.value.split('&').length).toBeGreaterThan(MATRIX.split('&').length)
     })
 
-    it('adds a row from the toolbar', () => {
-      const { editor, field } = open(MATRIX)
-      const [addRow] = editor.dom.querySelectorAll('.block-editor__button')
-      ;(addRow as HTMLButtonElement).click()
-      expect(field.value.split('\\\\').length).toBe(3)
+    it('grows the grid the caret is in, not the formula around it', () => {
+      const { field } = open('\\[\n  A + \\begin{pmatrix} a & b \\end{pmatrix}\n\\]')
+      const caret = field.value.indexOf('b') + 1
+      field.setSelectionRange(caret, caret)
+      press(field, 'Tab')
+      expect(field.value).toBe('A + \\begin{pmatrix} a & b & \\end{pmatrix}')
     })
 
-    it('dims the grid controls for a formula that has no grid', () => {
-      // Dimmed rather than hidden: removing them would make the bar jump
-      // every time a matrix is typed or deleted.
-      const { editor } = open()
-      const controls = editor.dom.querySelector('.block-editor__grid')
-      expect(controls?.classList.contains('block-editor__grid--off')).toBe(true)
-    })
-
-    it('enables the grid controls for a formula that has one', () => {
+    it('has no row or column buttons on the bar', () => {
+      // Growing a grid is part of walking it now: Tab past the last cell, or
+      // Enter past the last row. The buttons were from when the source area
+      // was the only way in.
       const { editor } = open(MATRIX)
-      const controls = editor.dom.querySelector('.block-editor__grid')
-      expect(controls?.classList.contains('block-editor__grid--off')).toBe(false)
+      expect(editor.dom.querySelectorAll('.block-editor__button')).toHaveLength(0)
+    })
+  })
+
+  describe('editing cells in the rendering', () => {
+    const MATRIX = '\\[\n  H = \\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}\n\\]'
+
+    /**
+     * The cells of the typeset formula, in reading order — which is not the
+     * order they appear in the DOM, since KaTeX emits a table column by
+     * column.
+     */
+    function cells(editor: FormulaEditor): HTMLElement[] {
+      const at = (cell: HTMLElement): number =>
+        Number(cell.dataset.cellRow) * 100 + Number(cell.dataset.cellColumn)
+      return [
+        ...editor.dom.querySelectorAll<HTMLElement>('.block-editor__preview [data-cell-from]')
+      ].sort((a, b) => at(a) - at(b))
+    }
+
+    /** Click a cell the way a pointer does: mousedown, which is what opens it. */
+    function click(cell: HTMLElement): void {
+      cell.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+    }
+
+    function cellField(editor: FormulaEditor): HTMLInputElement {
+      return editor.dom.querySelector('.cell-editor input') as HTMLInputElement
+    }
+
+    function type(field: HTMLInputElement, value: string): void {
+      field.value = value
+      field.dispatchEvent(new window.Event('input', { bubbles: true }))
+    }
+
+    it('offers a cell for every entry of a matrix inside a larger formula', () => {
+      // A matrix with maths either side of it is the common case, and the
+      // one the old separate grid view had nothing to say about.
+      const { editor } = open(MATRIX)
+      expect(cells(editor).map((cell) => cell.textContent)).toEqual(['a', 'b', 'c', 'd'])
     })
 
-    it('enables them as soon as a matrix is typed into a plain equation', () => {
+    it('opens a field over the cell that was clicked', () => {
+      const { editor } = open(MATRIX)
+      click(cells(editor)[1])
+      expect(cellField(editor)?.value).toBe('b')
+    })
+
+    it('writes what is typed into the source as it is typed', () => {
+      const { editor, field } = open(MATRIX)
+      click(cells(editor)[1])
+      type(cellField(editor), 'x^2')
+      expect(field.value).toBe('H = \\begin{pmatrix} a & x^2 \\\\ c & d \\end{pmatrix}')
+    })
+
+    it('commits the formula with the cell edit in it', () => {
+      const { editor, field, commit } = open(MATRIX)
+      click(cells(editor)[3])
+      type(cellField(editor), '0')
+      press(field, 'Enter', { metaKey: true })
+      expect(commit).toHaveBeenCalledWith(expect.stringContaining('c & 0'))
+    })
+
+    it('walks the grid on Tab', () => {
+      const { editor } = open(MATRIX)
+      click(cells(editor)[0])
+      press(cellField(editor), 'Tab')
+      expect(cellField(editor).value).toBe('b')
+    })
+
+    it('grows the matrix when Tab runs out of cells', () => {
+      const { editor, field } = open(MATRIX)
+      click(cells(editor)[3])
+      press(cellField(editor), 'Tab')
+      expect(field.value).toContain('a & b &')
+      expect(field.value).toContain('c & d &')
+    })
+
+    it('puts a cell back on Escape without abandoning the formula', () => {
+      const { editor, field, cancel } = open(MATRIX)
+      click(cells(editor)[0])
+      type(cellField(editor), 'nonsense')
+      press(cellField(editor), 'Escape')
+      expect(field.value).toContain('a & b')
+      expect(cancel).not.toHaveBeenCalled()
+    })
+
+    it('adds a row to the matrix, not to the formula around it', () => {
+      // A whole-body rewrite put the row break between `H =` and the
+      // matrix, which is a parse error rather than a row.
+      const { editor, field } = open(MATRIX)
+      click(cells(editor)[2])
+      press(cellField(editor), 'Enter')
+      expect(field.value).toBe('H = \\begin{pmatrix} a & b \\\\ c & d \\\\\n & \\end{pmatrix}')
+      expect(cellField(editor).value).toBe('')
+    })
+  })
+
+  describe('undo', () => {
+    const MATRIX = '\\[\n  H = \\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}\n\\]'
+
+    function type(field: HTMLInputElement | HTMLTextAreaElement, value: string): void {
+      field.value = value
+      field.dispatchEvent(new window.Event('input', { bubbles: true }))
+    }
+
+    function undo(editor: FormulaEditor): void {
+      press(editor.dom, 'z', { metaKey: true })
+    }
+
+    function redo(editor: FormulaEditor): void {
+      press(editor.dom, 'z', { metaKey: true, shiftKey: true })
+    }
+
+    it('puts back what was typed in the source', () => {
       const { editor, field } = open()
-      field.value = '\\begin{pmatrix} a & b \\end{pmatrix}'
-      field.dispatchEvent(new window.Event('input'))
-      const controls = editor.dom.querySelector('.block-editor__grid')
-      expect(controls?.classList.contains('block-editor__grid--off')).toBe(false)
+      type(field, 'a = b')
+      undo(editor)
+      expect(field.value).toBe('D_\\psi(x, y) \\coloneqq \\psi(x) - \\psi(y)')
+      redo(editor)
+      expect(field.value).toBe('a = b')
+    })
+
+    it('puts back a cell edited in the rendering', () => {
+      // The edit the field's own undo could never see: the cell writes to it
+      // by assignment, which is exactly what clears the native undo stack.
+      const { editor, field } = open(MATRIX)
+      const cell = editor.dom.querySelector('[data-cell-from]') as HTMLElement
+      cell.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+      const input = editor.dom.querySelector('.cell-editor input') as HTMLInputElement
+      type(input, 'z^2')
+      expect(field.value).toContain('z^2')
+      undo(editor)
+      expect(field.value).toBe('H = \\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}')
+    })
+
+    it('puts back a row added to a matrix', () => {
+      const { editor, field } = open(MATRIX)
+      const before = field.value
+      field.setSelectionRange(field.value.length, field.value.length)
+      press(field, 'Tab')
+      expect(field.value).not.toBe(before)
+      undo(editor)
+      expect(field.value).toBe(before)
+    })
+
+    it('puts back an environment switch, dropdown and all', () => {
+      const { editor, field } = open()
+      chooseEnv(editor, 'align')
+      expect(field.value).toContain('&')
+      undo(editor)
+      expect(field.value).toBe('D_\\psi(x, y) \\coloneqq \\psi(x) - \\psi(y)')
+      const button = editor.dom.querySelector('.ui-dropdown__button') as HTMLElement
+      expect(button.textContent).toContain('Equation')
+    })
+
+    it('commits what the undo left, not what was typed before it', () => {
+      const { editor, field, commit } = open()
+      type(field, 'a = b')
+      undo(editor)
+      press(field, 'Enter', { metaKey: true })
+      expect(commit).toHaveBeenCalledWith(EQUATION)
+    })
+
+    it('leaves the block alone when there is nothing left to undo', () => {
+      const { editor, cancel, commit } = open()
+      undo(editor)
+      expect(cancel).not.toHaveBeenCalled()
+      expect(commit).not.toHaveBeenCalled()
     })
   })
 

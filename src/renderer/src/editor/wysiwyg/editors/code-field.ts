@@ -120,10 +120,6 @@ export class CodeField {
     el.style.height = `${el.scrollHeight}px`
   }
 
-  setHidden(hidden: boolean): void {
-    this.dom.classList.toggle('code-field--hidden', hidden)
-  }
-
   private paint(): void {
     if (!this.coloured) return
     paintLatex(this.input.value, this.highlight)

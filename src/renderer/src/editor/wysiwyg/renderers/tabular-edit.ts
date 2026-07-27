@@ -154,26 +154,53 @@ export function addTabularColumn(source: string): string {
 }
 
 /**
- * One more column in a spec, matching whatever the last real column was.
+ * Which parts of a column spec are columns.
  *
- * Appended after the last alignment letter rather than at the end of the
- * string: booktabs specs habitually end in `@{}`, which is inter-column
- * material and not a column, and a letter after it would print the new column
- * outside the table's own margin.
+ * Not every letter is one: `@{}` is inter-column material, `>{\bfseries}` is a
+ * hook, and `p{3cm}` is a column whose width travels with it. Both growing and
+ * shrinking need to know where the columns actually are — appending a letter
+ * after a trailing `@{}` prints the new column outside the table's own margin,
+ * and dropping a `p` on its own leaves a stray `{3cm}` behind.
  */
-export function growColumnSpec(spec: string): string {
-  const letters = /[lcrX]/g
-  let lastIndex = -1
-  let lastChar = 'l'
-  let match: RegExpExecArray | null
-  while ((match = letters.exec(spec)) !== null) {
-    // `p{3cm}`-style columns carry an argument the letter class can't see;
-    // `@{...}` groups are skipped by only ever matching column letters.
-    lastIndex = match.index
-    lastChar = match[0]
+function columnSpans(spec: string): Array<{ from: number; to: number }> {
+  const spans: Array<{ from: number; to: number }> = []
+  for (let i = 0; i < spec.length; i++) {
+    const c = spec[i]
+    if ('@pmbP><!'.includes(c) && spec[i + 1] === '{') {
+      let depth = 0
+      let j = i + 1
+      for (; j < spec.length; j++) {
+        if (spec[j] === '{') depth++
+        else if (spec[j] === '}') {
+          depth--
+          if (depth === 0) break
+        }
+      }
+      // A fixed-width column occupies one; the rest is material between them.
+      if ('pmbP'.includes(c)) spans.push({ from: i, to: j + 1 })
+      i = j
+      continue
+    }
+    if (c === 'l' || c === 'c' || c === 'r' || c === 'X') spans.push({ from: i, to: i + 1 })
   }
-  if (lastIndex === -1) return spec + 'l'
-  return `${spec.slice(0, lastIndex + 1)}${lastChar}${spec.slice(lastIndex + 1)}`
+  return spans
+}
+
+/** One more column in a spec, matching whatever the last real column was. */
+export function growColumnSpec(spec: string): string {
+  const spans = columnSpans(spec)
+  const last = spans[spans.length - 1]
+  if (!last) return spec + 'l'
+  const column = spec.slice(last.from, last.to)
+  return `${spec.slice(0, last.to)}${column}${spec.slice(last.to)}`
+}
+
+/** One fewer, so a spec doesn't outlive the column it described. */
+export function shrinkColumnSpec(spec: string): string {
+  const spans = columnSpans(spec)
+  const last = spans[spans.length - 1]
+  if (!last || spans.length <= 1) return spec
+  return spec.slice(0, last.from) + spec.slice(last.to)
 }
 
 /**
@@ -208,6 +235,114 @@ export function setTabularColumnSpec(source: string, spec: string): string {
 /** The declared column spec, for a control that shows it. */
 export function tabularColumnSpec(source: string): string {
   return splitTabularSource(source)?.colSpec ?? ''
+}
+
+/**
+ * Drop the last row that holds content.
+ *
+ * The row's own leading newline goes with it, and the rule under it stays
+ * where it was: what is being removed is a row, not the floor beneath it.
+ */
+export function removeTabularRow(source: string): string {
+  const split = splitTabularSource(source)
+  if (!split) return source
+  const spans = rowSpans(split.body)
+  const content = spans.filter((span) => !isRuleOnly(split.body.slice(span.from, span.to)))
+  if (content.length <= 1) return source
+
+  const last = content[content.length - 1]
+  // A rule at the head of the segment belongs to the table, not to the row:
+  // deleting the only row under a `\midrule` should not take the rule with
+  // it, or adding a row back would leave the table without its divider.
+  const rules = consumeLeadingRules(split.body.slice(last.from, last.to)).at
+  const before = split.body.slice(0, last.from + rules).replace(/[ \t]+$/, '')
+  const after = split.body.slice(last.to + last.separator.length)
+  return `${split.prefix}${before}${joinAfterCut(before, after)}${split.suffix}`
+}
+
+/** Close the gap a removed row leaves, without eating the next line's own. */
+function joinAfterCut(before: string, after: string): string {
+  return before.endsWith('\n') ? after.replace(/^[ \t]*\n/, '') : after
+}
+
+/** The last top-level `&` in a row, which is where its last cell begins. */
+function lastCellStart(row: string): number {
+  let depth = 0
+  let at = -1
+  for (let i = 0; i < row.length; i++) {
+    const c = row[i]
+    if (c === '\\') {
+      i++
+      continue
+    }
+    if (c === '{') depth++
+    else if (c === '}') depth--
+    else if (c === '&' && depth === 0) at = i
+  }
+  return at
+}
+
+/** Drop the last cell of every row, and the column it filled in the spec. */
+export function removeTabularColumn(source: string): string {
+  const split = splitTabularSource(source)
+  if (!split) return source
+  if (tabularColumnCount(source) <= 1) return source
+  let body = split.body
+  // Back to front, so an earlier splice can't shift a later one's offsets.
+  for (const span of rowSpans(body).slice().reverse()) {
+    const row = body.slice(span.from, span.to)
+    if (isRuleOnly(row)) continue
+    const at = lastCellStart(row)
+    if (at === -1) continue
+    // One space back before the `\\` the row still ends with, so the source
+    // reads the way the author wrote it rather than `Acc\\`.
+    const kept = row.slice(0, at).replace(/\s*$/, '') + (span.separator === '' ? '' : ' ')
+    body = `${body.slice(0, span.from)}${kept}${body.slice(span.to)}`
+  }
+  return `${withColumnSpec(split.prefix, shrinkColumnSpec(split.colSpec))}${body}${split.suffix}`
+}
+
+/**
+ * Resize the table to a shape the author asked for.
+ *
+ * Growing is what this is mostly for — the new rows and columns arrive empty,
+ * to be filled in the rendering — but it shrinks too, and shrinking discards
+ * whatever was in what it removes. That is what the editor's undo is for; the
+ * alternative, refusing to shrink a table that has anything in it, would mean
+ * the number in the header is only editable upwards.
+ */
+export function setTabularShape(
+  source: string,
+  shape: { rows?: number; columns?: number }
+): string {
+  if (!splitTabularSource(source)) return source
+  let next = source
+
+  // Columns first: a row added afterwards is then born the right width.
+  if (shape.columns !== undefined) {
+    const target = Math.max(1, Math.floor(shape.columns))
+    for (let guard = 0; tabularColumnCount(next) < target && guard < 64; guard++) {
+      next = addTabularColumn(next)
+    }
+    for (let guard = 0; tabularColumnCount(next) > target && guard < 64; guard++) {
+      const shrunk = removeTabularColumn(next)
+      if (shrunk === next) break
+      next = shrunk
+    }
+  }
+
+  if (shape.rows !== undefined) {
+    const target = Math.max(1, Math.floor(shape.rows))
+    for (let guard = 0; tabularShape(next).rows < target && guard < 256; guard++) {
+      next = addTabularRow(next)
+    }
+    for (let guard = 0; tabularShape(next).rows > target && guard < 256; guard++) {
+      const shrunk = removeTabularRow(next)
+      if (shrunk === next) break
+      next = shrunk
+    }
+  }
+  return next
 }
 
 /** Rows and columns, for a note on the editor's bar. */

@@ -2,19 +2,20 @@ import katex from 'katex'
 import {
   addColumn,
   addRow,
-  cellSpans,
   ENV_CHOICES,
   errorOffset,
-  gridRegion,
-  isGridBody,
+  gridCells,
+  gridSpans,
   nextCell,
   parseMathShell,
   presentBody,
+  rewriteGrid,
   serializeMathShell,
   shellChoice,
   switchEnvironment,
   tidyErrorMessage,
   withLabelText,
+  writeCell,
   type MathShell
 } from '../math-source'
 import {
@@ -28,9 +29,11 @@ import {
 import { getMathMacros } from '../math-macros'
 import { createIcon } from '../icons'
 import { createDropdown, type Dropdown } from '../dropdown'
-import { MatrixGrid } from '../nodeviews/matrix-grid'
+import { markMathCells } from '../renderers/math-cells'
+import { CellEditor, type CellSite } from './cell-editor'
 import { CodeField } from './code-field'
-import { EditorPanel, panelButton, panelName } from './editor-panel'
+import { EditHistory } from './edit-history'
+import { EditorPanel, panelName } from './editor-panel'
 
 // The formula editing surface.
 //
@@ -46,15 +49,32 @@ import { EditorPanel, panelButton, panelName } from './editor-panel'
 //   - the environment is a choice, so it's a dropdown
 //   - the label is metadata, so it's a field (when detaching it is safe —
 //     see math-source, which leaves per-row labels in an `align` alone)
-//   - the grid shape is structure, so it's two buttons and the Tab key
 //   - the maths is the only thing left, so it's the only thing in the text
 //     area — dedented, with the wrapper gone
 //
 // and `\` completes, listing the paper's own macros first.
 //
+// The typeset formula underneath is not only a preview: every cell of every
+// grid in it can be clicked and typed into, which is where matrices are
+// edited now. The previous answer to "edit this matrix as a matrix" was a
+// separate view of boxes you had to switch to, and it appeared only when the
+// whole formula was one matrix — so the common `H = \begin{pmatrix}…` had
+// nothing to click. See `renderers/math-cells`, which traces a rendered cell
+// back to the characters it came from.
+//
+// Growing a grid is part of walking it — Tab past the last cell makes a
+// column, Enter past the last row makes a row — so the bar has no buttons for
+// it. It had two, from when the source area was the only way in.
+//
 // The chrome around all that — the bar, the hint, the delete button, the
 // preview strip — is `EditorPanel`, shared with the table and preamble
 // editors so the three read as one editor with three subjects.
+
+/** What an undo has to put back: the maths, and the wrapper around it. */
+interface FormulaState {
+  body: string
+  shell: MathShell
+}
 
 export interface FormulaEditorOptions {
   latex: string
@@ -79,21 +99,20 @@ export class FormulaEditor {
   private field: HTMLInputElement | HTMLTextAreaElement
   private preview: HTMLElement | null = null
   private completions: CompletionPopup | null = null
-  private gridControls: HTMLElement | null = null
   private envDropdown: Dropdown | null = null
-  private gridHost: HTMLElement | null = null
-  private grid: MatrixGrid | null = null
-  private sourceToggle: HTMLButtonElement | null = null
+  private cellEditor: CellEditor | null = null
+  private cells: CellSite[] = []
+  private history: EditHistory<FormulaState>
+  /** Show the shell's label in the bar, after an undo moved it. */
+  private reflectLabel: (() => void) | null = null
   /**
-   * Whether to edit a grid as cells rather than as LaTeX.
+   * Which grid the row and column buttons act on.
    *
-   * Defaults on for a matrix and off for `align`, even though both are grids.
-   * A matrix is a table of short entries and reads as one; an `align` is a
-   * derivation whose rows are long, and chopping those into fixed-width
-   * inputs would be a worse text area, not a better table. The toggle in the
-   * bar overrides either way.
+   * A formula can hold several — `H` and `H^{-1}` side by side — and "add a
+   * row" has to mean one of them. It means the last one touched, which is the
+   * one the author is looking at.
    */
-  private preferGrid = true
+  private activeGrid = 0
   private readonly original: string
   private readonly initialBody: string
   private readonly initialChoice: string | null
@@ -118,42 +137,43 @@ export class FormulaEditor {
 
     this.code = options.displayMode ? this.buildTextarea() : this.buildInput()
     this.field = this.code.input
-    // `env !== ''` is "the body is a matrix", as opposed to "the formula's own
-    // environment happens to be a grid" — see `preferGrid`.
-    this.preferGrid = (gridRegion(this.shell, this.field.value)?.env ?? '') !== ''
+    // Every path that rewrites the source records one of these, and ⌘Z walks
+    // them. The field's own undo is not usable here — see `edit-history`.
+    this.history = new EditHistory<FormulaState>(this.snapshot(), this.field.value.length, {
+      restore: (state, caret) => this.restore(state, caret)
+    })
 
     if (options.displayMode) {
       this.buildBar()
-      this.gridHost = document.createElement('div')
-      this.gridHost.className = 'block-editor__grid-host'
-      this.panel.body.appendChild(this.gridHost)
       this.panel.body.appendChild(this.code.dom)
       this.preview = this.panel.previewHost()
       this.preview.classList.add('math-preview')
+      this.cellEditor = new CellEditor({
+        host: this.preview,
+        read: (cell) => this.field.value.slice(cell.from, cell.to),
+        write: (cell, text) => this.writeCellText(cell, text),
+        repaint: () => this.repaint(),
+        grow: (cell, what) => this.growGrid(what, cell.grid),
+        onDone: () => this.focus(),
+        onCommitBlock: () => this.finish(true)
+      })
       this.paint()
-      this.updateGridControls()
-      this.updateSurface()
     } else {
       this.panel.body.appendChild(this.code.dom)
     }
 
     this.completions = new CompletionPopup((completion) => this.accept(completion))
     this.field.addEventListener('keydown', (event) => this.onKeyDown(event as KeyboardEvent))
-    // On the subtree rather than the field: the grid's cells, the label and
-    // the environment list are all part of "still editing this formula", and
-    // a per-field blur handler would have to enumerate them.
+    // Capture, and on the whole panel: the undo keys have to be taken before
+    // the field they were pressed in acts on them, whichever field that is.
+    this.dom.addEventListener('keydown', (event) => this.onUndoKey(event), true)
+    // On the subtree rather than the field: the cell fields in the preview,
+    // the label and the environment list are all part of "still editing this
+    // formula", and a per-field blur handler would have to enumerate them.
     this.dom.addEventListener('focusout', () => this.onBlur())
-    // Escape and ⌘⏎ have to work from a grid cell too, and those inputs are
-    // built by MatrixGrid, which knows nothing about committing a formula.
-    this.dom.addEventListener('keydown', (event) => this.onHostKeyDown(event))
   }
 
   focus(): void {
-    if (this.grid && this.gridHost && !this.gridHost.hidden) {
-      const grid = this.grid
-      requestAnimationFrame(() => grid.focus())
-      return
-    }
     const el = this.field
     requestAnimationFrame(() => {
       el.focus()
@@ -177,8 +197,8 @@ export class FormulaEditor {
     this.completions = null
     this.envDropdown?.destroy()
     this.envDropdown = null
-    this.grid?.destroy()
-    this.grid = null
+    this.cellEditor?.destroy()
+    this.cellEditor = null
   }
 
   // ── Chrome ───────────────────────────────────────────────────────────
@@ -206,27 +226,6 @@ export class FormulaEditor {
     if (this.shell.label !== null || this.canCarryLabel()) {
       this.panel.addControl(this.buildLabelField())
     }
-
-    this.gridControls = document.createElement('span')
-    this.gridControls.className = 'block-editor__grid'
-    this.gridControls.appendChild(
-      panelButton('rows', 'Add row', () => this.applyToBody(addRow), { plus: true })
-    )
-    this.gridControls.appendChild(
-      panelButton('columns', 'Add column', () => this.applyToBody(addColumn), { plus: true })
-    )
-    this.panel.addControl(this.gridControls)
-
-    // Only appears when there is a grid to switch away from — the cells view
-    // is the default for a matrix, and this is the way back to the source for
-    // anything the table can't express (a `\multicolumn`, a stray `\hline`).
-    this.sourceToggle = panelButton('code', 'Edit as LaTeX', () => {
-      this.preferGrid = !this.preferGrid
-      this.updateSurface()
-      this.focus()
-    })
-    this.sourceToggle.hidden = true
-    this.panel.addControl(this.sourceToggle)
   }
 
   /** Numbered environments are the ones worth referring to by label. */
@@ -257,13 +256,15 @@ export class FormulaEditor {
     input.spellcheck = false
     input.className = 'block-editor__label-input'
     input.title = 'Reference name for \\ref and \\cref'
-    const reflect = (): void => {
+    this.reflectLabel = () => {
+      input.value = this.shell.label ?? ''
       wrap.classList.toggle('block-editor__label--set', input.value.trim() !== '')
     }
-    reflect()
+    this.reflectLabel()
     input.addEventListener('input', () => {
       this.shell = withLabelText(this.shell, input.value)
-      reflect()
+      wrap.classList.toggle('block-editor__label--set', input.value.trim() !== '')
+      this.remember('type')
     })
     input.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' || event.key === 'Escape') {
@@ -297,121 +298,91 @@ export class FormulaEditor {
     })
   }
 
+  // ── Undo ─────────────────────────────────────────────────────────────
+
+  /** Everything an undo has to put back: the maths, and what wraps it. */
+  private snapshot(): FormulaState {
+    return { body: this.field.value, shell: this.shell }
+  }
+
+  /** Note the current state, coalescing a run of keystrokes into one step. */
+  private remember(kind: 'type' | 'step' = 'step'): void {
+    this.history.record(this.snapshot(), this.field.selectionStart ?? 0, kind)
+  }
+
+  private onUndoKey(event: KeyboardEvent): void {
+    if (!this.history.handleKey(event)) return
+    event.preventDefault()
+    event.stopPropagation()
+  }
+
+  /** Put a snapshot back on every part of the surface that shows it. */
+  private restore(state: FormulaState, caret: number): void {
+    this.cellEditor?.close()
+    this.shell = state.shell
+    this.code.value = state.body
+    // The bar is showing the old wrapper: an undone environment switch has to
+    // move the dropdown back, and an undone rename the label field.
+    this.envDropdown?.setValue(shellChoice(this.shell) ?? '')
+    this.reflectLabel?.()
+    this.paint()
+    this.field.focus()
+    this.field.setSelectionRange(caret, caret)
+    this.code.refresh()
+  }
+
   // ── Editing ──────────────────────────────────────────────────────────
 
   private switchEnv(choice: string): void {
+    // Any open cell is holding offsets into a body about to be rewritten.
+    this.cellEditor?.close()
     const result = switchEnvironment(this.shell, choice, this.field.value)
     this.shell = result.shell
     this.code.value = result.body
+    this.remember()
     this.schedulePaint()
-    this.updateGridControls()
-    // `align` is a grid and `equation` isn't, so the surface itself changes.
-    this.updateSurface()
     this.focus()
   }
 
-  // ── The cells view ───────────────────────────────────────────────────
+  // ── The cells in the rendering ───────────────────────────────────────
 
-  /**
-   * Show the grid when the formula has one and the author hasn't asked for the
-   * source, and the text area otherwise. Called after anything that can change
-   * whether a grid exists: typing, switching environment, toggling the view.
-   */
-  private updateSurface(): void {
-    const host = this.gridHost
-    if (!host) return
-    const region = gridRegion(this.shell, this.field.value)
-    const showGrid = region !== null && this.preferGrid
-
-    if (this.sourceToggle) {
-      this.sourceToggle.hidden = region === null
-      this.sourceToggle.title = showGrid ? 'Edit as LaTeX' : 'Edit as a grid'
-      this.sourceToggle.setAttribute('aria-label', this.sourceToggle.title)
-      this.sourceToggle.classList.toggle('block-editor__button--on', !showGrid)
-    }
-    // The row/column buttons are the source view's way to grow a grid; the
-    // cells view grows by typing into the dashed edge, so they'd be noise.
-    this.gridControls?.classList.toggle('block-editor__grid--hidden', showGrid)
-
-    host.hidden = !showGrid
-    this.code.setHidden(showGrid)
-    if (!showGrid) {
-      this.grid?.destroy()
-      this.grid = null
-      return
-    }
-
-    const body = this.field.value.slice(region!.from, region!.to)
-    if (this.grid) {
-      this.grid.setBody(body)
-      return
-    }
-    this.grid = new MatrixGrid({ body, onChange: (next) => this.writeGrid(next) })
-    host.replaceChildren(this.grid.dom)
+  /** Write a cell's new text into the body, from an edit in the preview. */
+  private writeCellText(cell: CellSite, text: string): number {
+    const result = writeCell(this.field.value, cell.from, cell.to, text)
+    this.code.value = result.body
+    this.activeGrid = cell.grid
+    // Typing in a cell coalesces the same way typing in the source does, so
+    // undo goes back to what the cell held rather than a letter at a time.
+    this.history.record(this.snapshot(), cell.from, 'type')
+    return result.to
   }
 
-  /** Splice a body the grid rewrote back into the region it came from. */
-  private writeGrid(gridBody: string): void {
-    const region = gridRegion(this.shell, this.field.value)
-    if (!region) return
-    const value = this.field.value
-    // A grid that is the whole body sits where it is; one inside a `\begin`
-    // keeps the wrapper on its own lines, which is how it was written and how
-    // the source view will show it if the author switches back.
-    const text =
-      region.env === ''
-        ? gridBody
-        : `\n${gridBody
-            .split('\n')
-            .map((line) => `  ${line}`)
-            .join('\n')}\n`
-    this.code.value = value.slice(0, region.from) + text + value.slice(region.to)
-    this.schedulePaint()
+  /** Redraw the formula now — not on the next frame — and re-find its cells. */
+  private repaint(): CellSite[] {
+    this.paint()
+    return this.cells
   }
 
   /**
-   * Finish keys, for focus that lives in a cell. The text area has its own
-   * handler, so skip anything originating there to avoid running twice.
+   * Add a row or a column to one grid of the formula.
+   *
+   * To *one* grid: the body of `H = \begin{pmatrix}…\end{pmatrix}, \quad
+   * H^{-1} = …` is not itself a grid, and the row break a whole-body rewrite
+   * used to add landed between the two matrices rather than inside either.
    */
-  private onHostKeyDown(event: KeyboardEvent): void {
-    if (event.target === this.field) return
-    if (!this.gridHost?.contains(event.target as Node)) return
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      this.finish(false)
-      return
-    }
-    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-      event.preventDefault()
-      this.finish(true)
-    }
-  }
-
-  /** Run a body transform, then put the caret in the cell it created. */
-  private applyToBody(transform: (body: string) => string): void {
-    const before = cellSpans(this.field.value).length
-    const next = transform(this.field.value)
-    this.code.value = next
-    const spans = cellSpans(next)
-    const target = spans[Math.min(before, spans.length - 1)]
-    this.field.focus()
-    if (target) this.field.setSelectionRange(target.to, target.to)
-    this.schedulePaint()
+  private growGrid(what: 'row' | 'column', grid = this.activeGrid): void {
+    const spans = gridSpans(this.shell, this.field.value)
+    const span = spans[grid] ?? spans[0]
+    if (!span) return
+    this.activeGrid = spans.indexOf(span)
+    this.code.value = rewriteGrid(this.field.value, span, what === 'row' ? addRow : addColumn)
+    this.remember()
   }
 
   private onInput(): void {
+    this.remember('type')
     this.schedulePaint()
     this.updateCompletions()
-    this.updateGridControls()
-    this.updateSurface()
-  }
-
-  private updateGridControls(): void {
-    if (!this.gridControls) return
-    this.gridControls.classList.toggle(
-      'block-editor__grid--off',
-      !isGridBody(this.shell, this.field.value)
-    )
   }
 
   /**
@@ -454,6 +425,9 @@ export class FormulaEditor {
     const result = applyCompletion(this.field.value, query.from, caret, completion)
     this.code.value = result.value
     this.field.setSelectionRange(result.caret, result.caret)
+    // A completion is one step whatever its length, not a continuation of
+    // the `\wo` that opened the list.
+    this.remember()
     this.completions?.hide()
     this.field.focus()
     this.schedulePaint()
@@ -537,7 +511,15 @@ export class FormulaEditor {
       return
     }
     if (direction === -1) return
-    this.applyToBody(addColumn)
+    // The grid the caret is in, which for a formula holding two matrices is
+    // not necessarily the one the bar's buttons would grow.
+    const grid = gridForCaret(this.shell, this.field.value, caret)
+    this.growGrid('column', grid)
+    const span = gridSpans(this.shell, this.field.value)[grid]
+    const cells = span ? gridCells(this.field.value, span) : []
+    const made = cells[cells.length - 1]
+    if (made) this.field.setSelectionRange(made.to, made.to)
+    this.schedulePaint()
   }
 
   /** Remove the equation, editor and all. */
@@ -552,6 +534,10 @@ export class FormulaEditor {
     this.paintQueued = true
     requestAnimationFrame(() => {
       this.paintQueued = false
+      // Redrawing under an open cell field would throw away the element it
+      // is sitting on. Nothing is lost by waiting: the cell writes its text
+      // through as it is typed, and finishing repaints.
+      if (this.cellEditor?.active) return
       this.paint()
     })
   }
@@ -561,6 +547,8 @@ export class FormulaEditor {
     if (!preview) return
     preview.classList.remove('math-preview--error')
     preview.replaceChildren()
+    this.cells = []
+    this.cellEditor?.setCells(this.cells)
     const source = this.field.value.trim()
     if (source === '') return
     try {
@@ -570,6 +558,8 @@ export class FormulaEditor {
         strict: false,
         macros: getMathMacros()
       })
+      this.cells = markMathCells(preview, this.shell, this.field.value)
+      this.cellEditor?.setCells(this.cells)
     } catch (err) {
       preview.classList.add('math-preview--error')
       preview.appendChild(this.errorReport(err as Error))
@@ -758,6 +748,25 @@ class CompletionPopup {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
+
+/**
+ * Which grid the caret sits in, innermost first.
+ *
+ * Tab at the end of a matrix should grow *that* matrix, and a formula can
+ * hold more than one — or one inside another, where the answer is the inner.
+ */
+function gridForCaret(shell: MathShell, body: string, caret: number): number {
+  let best = 0
+  let narrowest = Infinity
+  gridSpans(shell, body).forEach((span, index) => {
+    if (caret < span.from || caret > span.to) return
+    const width = span.to - span.from
+    if (width >= narrowest) return
+    narrowest = width
+    best = index
+  })
+  return best
+}
 
 /** Macro names the current paper's preamble declared, for completion. */
 function userMacroNames(): string[] {

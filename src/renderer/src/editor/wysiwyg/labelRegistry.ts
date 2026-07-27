@@ -240,10 +240,28 @@ function splitMathLines(body: string): string[] {
   return out
 }
 
-const PER_LINE_NUMBERED_ENVS = new Set(['align', 'gather', 'multline', 'eqnarray'])
+const PER_LINE_NUMBERED_ENVS = new Set([
+  'align',
+  'gather',
+  'multline',
+  'eqnarray',
+  'alignat',
+  'flalign',
+  'xalignat',
+  'IEEEeqnarray'
+])
 const SINGLE_NUMBERED_ENVS = new Set(['equation'])
 
-function parseMathLines(latex: string): { kind: 'numbered' | 'starred' | 'plain'; lines: MathLine[] } {
+interface MathLines {
+  kind: 'numbered' | 'starred' | 'plain'
+  lines: MathLine[]
+  // `\begin{subequations}` numbers its whole group once and letters the
+  // lines inside it: (1a), (1b), (1c). Flagged here so the caller consumes
+  // a single equation number for the group.
+  lettered?: boolean
+}
+
+function parseMathLines(latex: string): MathLines {
   const trimmed = latex.trim()
   // \[ ... \] is unnumbered.
   if (/^\\\[[\s\S]*\\\]$/.test(trimmed)) {
@@ -256,6 +274,17 @@ function parseMathLines(latex: string): { kind: 'numbered' | 'starred' | 'plain'
   const isStarred = envName.endsWith('*')
   const baseName = isStarred ? envName.slice(0, -1) : envName
   if (isStarred) return { kind: 'starred', lines: [] }
+  if (baseName === 'subequations') {
+    // Number the group once and letter the inner lines. The body is one
+    // nested display env (align/gather/…) preceded by an optional `\label`
+    // for the group itself — drop that prefix so the nested environment is
+    // what gets parsed. Only the prefix: the `\label`s *inside* the nested
+    // environment are the per-line ones we're after.
+    const innerStart = body.indexOf('\\begin{')
+    const inner = parseMathLines(innerStart >= 0 ? body.slice(innerStart).trim() : body.trim())
+    if (inner.kind !== 'numbered') return { kind: 'plain', lines: [] }
+    return { kind: 'numbered', lines: inner.lines, lettered: true }
+  }
   if (SINGLE_NUMBERED_ENVS.has(baseName)) {
     const label = extractLabelFromMathChunk(body)
     return { kind: 'numbered', lines: [{ label, numbered: true }] }
@@ -356,10 +385,31 @@ function walkMathBlock(ctx: BuildContext, node: PMNode, pos: number): void {
     return
   }
   const tags: Array<string | null> = []
+  // A subequations group consumes exactly one number; its lines are
+  // distinguished by a trailing letter.
+  const groupNumber = parsed.lettered ? String(++ctx.equationCounter) : null
+  let letterIndex = 0
+  if (groupNumber !== null) {
+    // `\label` on the subequations env itself refers to the whole group.
+    registerLabel(ctx, node.attrs.label as string | null, {
+      kind: 'equation',
+      number: `(${groupNumber})`,
+      shortNumber: groupNumber,
+      eqrefText: `(${groupNumber})`,
+      pretty: `${KIND_LABEL.equation} (${groupNumber})`,
+      kindLabel: KIND_LABEL.equation
+    })
+  }
   for (const line of parsed.lines) {
     if (line.numbered) {
-      ctx.equationCounter++
-      const num = String(ctx.equationCounter)
+      let num: string
+      if (groupNumber !== null) {
+        num = `${groupNumber}${String.fromCharCode(97 + letterIndex)}`
+        letterIndex++
+      } else {
+        ctx.equationCounter++
+        num = String(ctx.equationCounter)
+      }
       tags.push(num)
       const fallbackKey = node.attrs.label as string | null
       // Prefer the per-line label, fall back to the node's primary label

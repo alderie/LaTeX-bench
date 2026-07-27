@@ -1,5 +1,14 @@
 import { Node as PMNode } from 'prosemirror-model'
 import { latexSchema } from './schema'
+import { ENVIRONMENT_SIGNATURES, macroSignaturesFor } from './latex-signatures'
+import {
+  ACCENT_MACRO_NAMES,
+  applyAccent,
+  ESCAPED_CHARS,
+  isAccentMacro,
+  symbolFor,
+  SYMBOL_MACROS
+} from './text-symbols'
 
 // Lazy-import @unified-latex/* — they are ESM-only and bulky.
 type AstNode = any
@@ -114,7 +123,26 @@ const MATH_BLOCK_ENVS = new Set([
   'gather',
   'gather*',
   'multline',
-  'multline*'
+  'multline*',
+  // amsmath's remaining display forms plus the LaTeX 2.09 holdover. Without
+  // these, `\begin{alignat}{2}…` fell through to an opaque raw-LaTeX block:
+  // no KaTeX rendering, and its `\label`s never reached the cross-reference
+  // registry, so every `\cref` to them resolved to "?".
+  'alignat',
+  'alignat*',
+  'flalign',
+  'flalign*',
+  'eqnarray',
+  'eqnarray*',
+  'xalignat',
+  'xalignat*',
+  'xxalignat',
+  'IEEEeqnarray',
+  'IEEEeqnarray*',
+  // `subequations` wraps a group of numbered displays. It's a math *block*
+  // as far as the editor is concerned — rendering its inner align is far
+  // more useful than showing the whole group as raw source.
+  'subequations'
 ])
 
 const FIGURE_ENVS = new Set(['figure', 'figure*'])
@@ -255,8 +283,11 @@ const TRANSPARENT_INLINE_WRAPPERS = new Set([
   'textsf',
   'textrm',
   'textnormal',
+  'textup',
+  'textmd',
   'mbox',
-  'underline'
+  'hbox',
+  'ensuremath'
 ])
 
 // Inline macros with no required arguments — typographic icons, special
@@ -289,6 +320,15 @@ const ICON_MACRO_GLYPHS: Record<string, string> = {
   // unicode-ish text
   ldots: '…',
   dots: '…',
+  // Logos. Kept as source-preserving atoms rather than plain text so a save
+  // doesn't quietly demote `\LaTeX` to the five letters "LaTeX".
+  LaTeX: 'LaTeX',
+  LaTeXe: 'LaTeX2ε',
+  TeX: 'TeX',
+  BibTeX: 'BibTeX',
+  BibTeXe: 'BibTeX',
+  XeLaTeX: 'XeLaTeX',
+  LuaLaTeX: 'LuaLaTeX',
   textellipsis: '…',
   textbar: '|',
   textbackslash: '\\',
@@ -366,6 +406,8 @@ const KNOWN_INLINE_MACROS = new Set<string>([
   'emph',
   'texttt',
   'textsc',
+  'textsuperscript',
+  'textsubscript',
   'href',
   'url',
   'label',
@@ -375,7 +417,13 @@ const KNOWN_INLINE_MACROS = new Set<string>([
   ...TRANSPARENT_INLINE_WRAPPERS,
   ...Object.keys(ICON_MACRO_GLYPHS),
   ...SPACE_MACROS,
-  ...SILENT_MACROS
+  ...SILENT_MACROS,
+  // Characters-as-macros. Without these a paragraph opening with
+  // `\AA{}ngstr\"{o}m` looks like a structural macro with an argument and
+  // gets promoted to its own raw-LaTeX block.
+  ...ESCAPED_CHARS,
+  ...ACCENT_MACRO_NAMES,
+  ...Object.keys(SYMBOL_MACROS)
 ])
 
 function hasRequiredArg(macro: any): boolean {
@@ -471,12 +519,19 @@ export function repairSerializerDamage(tex: string): string {
 }
 
 export async function parseLatexToDoc(input: string): Promise<ParseResult> {
-  const { parse } = await loadParseModule()
+  const { getParser } = await loadParseModule()
   const { printRaw } = await loadPrintModule()
 
   const tex = repairSerializerDamage(input)
   sourceText = tex
-  const ast = parse(tex)
+  // Parse with an explicit signature table (see latex-signatures.ts). Without
+  // it unified-latex can't know that `\citep[see][p.~4]{key}` has three
+  // arguments, and every downstream stage has to guess.
+  const parser = getParser({
+    macros: macroSignaturesFor(tex),
+    environments: ENVIRONMENT_SIGNATURES
+  })
+  const ast = parser.parse(tex) as any
   const root = ast.content as AstNodeArr
 
   // Locate \begin{document}…\end{document}; everything before is preamble.
@@ -1429,8 +1484,20 @@ function buildFloat(envNode: any, printRaw: (n: AstNodeArr) => string): PMNode {
 
   let label: string | null = null
   let centering = false
-  const rest: AstNodeArr = []
-  const captionNodes: Array<{ index: number; node: PMNode }> = []
+  // Children are collected in document order: runs of ordinary content are
+  // converted as a batch, and a `\caption` closes the current run and takes
+  // its place in the sequence. Hoisting captions to the front (or pushing
+  // them to the back, which is what happened before) silently moves a
+  // table's caption from above the tabular to below it.
+  const children: PMNode[] = []
+  let rest: AstNodeArr = []
+  const flushRest = (): void => {
+    if (rest.length === 0) return
+    for (const block of nodesToBlocks(rest, printRaw)) {
+      if (FLOAT_BODY_ALLOWED.has(block.type.name)) children.push(block)
+    }
+    rest = []
+  }
 
   for (const child of content) {
     if (child.type === 'macro' && child.content === 'label') {
@@ -1447,24 +1514,14 @@ function buildFloat(envNode: any, printRaw: (n: AstNodeArr) => string): PMNode {
       const optional = (child.args ?? []).find((a: any) => a.openMark === '[')
       const short = optional ? printRaw(optional.content ?? []).trim() || null : null
       const inline = inlineNodes(args[args.length - 1]?.content ?? [], printRaw)
-      captionNodes.push({
-        index: rest.length,
-        node: latexSchema.nodes.caption.create({ short }, trimInline(inline))
-      })
+      flushRest()
+      children.push(latexSchema.nodes.caption.create({ short }, trimInline(inline)))
       continue
     }
     rest.push(child)
   }
+  flushRest()
 
-  let blocks = nodesToBlocks(rest, printRaw)
-  // Re-insert captions where they appeared relative to the other content
-  // is more precision than we can recover after `nodesToBlocks` merges
-  // paragraphs, so: a caption written before any content leads, otherwise
-  // it trails. That matches how tables/algorithms are conventionally set.
-  const leading = captionNodes.filter((c) => c.index === 0).map((c) => c.node)
-  const trailing = captionNodes.filter((c) => c.index > 0).map((c) => c.node)
-  blocks = blocks.filter((b) => FLOAT_BODY_ALLOWED.has(b.type.name))
-  const children = [...leading, ...blocks, ...trailing]
   if (children.length === 0) children.push(latexSchema.nodes.paragraph.create())
 
   return latexSchema.nodes.floatBlock.create({ kind, args, label, centering }, children)
@@ -1548,10 +1605,30 @@ function buildList(envNode: any, printRaw: (n: AstNodeArr) => string): PMNode {
   }
   if (current) items.push(current)
 
+  // Item bodies are block content, not inline content. Recursing through
+  // `nodesToBlocks` is what keeps a nested `\begin{itemize}` (and a second
+  // paragraph, and a display equation) inside the item instead of dropping
+  // it on the floor.
+  const ITEM_BODY_ALLOWED = new Set([
+    'paragraph',
+    'listBlock',
+    'mathBlock',
+    'codeBlock',
+    'rawLatex',
+    'figure',
+    'figureImage',
+    'floatBlock'
+  ])
   const itemNodes = items.map((item) => {
-    const inline = inlineNodes(item.body, printRaw)
-    const para = latexSchema.nodes.paragraph.create({}, trimInline(inline))
-    return latexSchema.nodes.listItem.create({ marker: item.marker }, [para])
+    let blocks = nodesToBlocks(item.body, printRaw).filter((b) =>
+      ITEM_BODY_ALLOWED.has(b.type.name)
+    )
+    // The schema requires the first child to be a paragraph, so an item
+    // that opens with a nested list gets an empty one to hang it off.
+    if (blocks.length === 0 || blocks[0].type.name !== 'paragraph') {
+      blocks = [latexSchema.nodes.paragraph.create(), ...blocks]
+    }
+    return latexSchema.nodes.listItem.create({ marker: item.marker }, blocks)
   })
 
   // Empty itemize → keep at least one empty bullet so structure stays.
@@ -1563,13 +1640,18 @@ function buildList(envNode: any, printRaw: (n: AstNodeArr) => string): PMNode {
 
 function buildTheorem(envNode: any, printRaw: (n: AstNodeArr) => string): PMNode {
   const kind = envNode.env as string
-  // Optional `[title]` immediately after \begin{kind}. unified-latex
-  // doesn't know the signature so it shows up as the first content node:
-  // a `string` of `[`, then content, then a `]`.
-  const { text: title, rest: content } = stripLeadingOptional(
-    envNode.content as AstNodeArr,
-    printRaw
-  )
+  // Optional `[title]` immediately after \begin{kind}. The signature table
+  // means the parser normally hands it to us as a real argument; the
+  // hand-rolled strip is the fallback for theorem-like environments a
+  // document declared itself (`\newtheorem{claimlet}{Claimlet}`), which
+  // aren't in the signature table.
+  const capturedTitle = envArgTexts(envNode, printRaw).find((a) => a.openMark === '[')?.text
+  const stripped =
+    capturedTitle === undefined
+      ? stripLeadingOptional(envNode.content as AstNodeArr, printRaw)
+      : { text: capturedTitle.trim() || null, rest: (envNode.content ?? []) as AstNodeArr }
+  const title = stripped.text
+  const content = stripped.rest
 
   const label = extractLabel(content)
   let blocks = nodesToBlocks(content, printRaw)
@@ -1684,18 +1766,42 @@ function applyLigatures(s: string): string {
     .replace(/--/g, '–')
     .replace(/``/g, '“')
     .replace(/''/g, '”')
+    // A lone backtick/apostrophe is the single-quote pair. LaTeX sets
+    // them as curly quotes, so showing the raw ASCII would be a
+    // visible mismatch with the compiled PDF.
+    .replace(/`/g, '‘')
+    .replace(/'/g, '’')
     .replace(/~/g, NBSP)
 }
 
 function inlineNodes(nodes: AstNodeArr, printRaw: (n: AstNodeArr) => string): PMNode[] {
   const out: PMNode[] = []
+  // Text arrives in two flavours. `srcBuf` holds characters that came from
+  // the source verbatim, and gets TeX's ligature rules applied to it — `---`
+  // is an em-dash only because the author typed three hyphens. `textBuf`
+  // holds text a macro stood for (`\textasciitilde` → `~`), which must NOT
+  // be re-read as a ligature: that tilde is a tilde, not a non-breaking
+  // space. Keeping the two apart is the difference between round-tripping
+  // `\textasciitilde{}` and silently turning it into `~`.
   let textBuf = ''
+  let srcBuf = ''
   let activeMarks: string[] = []
 
+  const settleSrc = (): void => {
+    if (srcBuf.length === 0) return
+    textBuf += applyLigatures(srcBuf)
+    srcBuf = ''
+  }
+  const pushLiteral = (s: string): void => {
+    settleSrc()
+    textBuf += s
+  }
+
   const flushText = (): void => {
+    settleSrc()
     if (textBuf.length === 0) return
     const marks = activeMarks.map((m) => latexSchema.marks[m].create())
-    out.push(latexSchema.text(applyLigatures(textBuf), marks))
+    out.push(latexSchema.text(textBuf, marks))
     textBuf = ''
   }
 
@@ -1706,7 +1812,7 @@ function inlineNodes(nodes: AstNodeArr, printRaw: (n: AstNodeArr) => string): PM
       // not here: unified-latex splits punctuation into its own `string`
       // nodes, so `---` arrives as three separate `-` nodes and a
       // per-node replace never matched.
-      textBuf += n.content as string
+      srcBuf += n.content as string
     } else if (n.type === 'verb') {
       // \verb|…| — the body is literal text, never LaTeX. Keeping the
       // exact delimiter means the round-trip re-emits identical source;
@@ -1723,7 +1829,7 @@ function inlineNodes(nodes: AstNodeArr, printRaw: (n: AstNodeArr) => string): PM
         })
       )
     } else if (n.type === 'whitespace') {
-      textBuf += ' '
+      srcBuf += ' '
     } else if (n.type === 'comment') {
       // skip
     } else if (n.type === 'inlinemath' || n.type === 'mathenv') {
@@ -1737,6 +1843,16 @@ function inlineNodes(nodes: AstNodeArr, printRaw: (n: AstNodeArr) => string): PM
         latexSchema.nodes.mathInline.create({ latex: inner ?? printRaw(n.content ?? []) })
       )
     } else if (n.type === 'macro') {
+      // Constructs that are really just characters (`\%`, `\c{c}`, `\ss`)
+      // join the text buffer rather than becoming their own node. Keeping
+      // them in one text run is what lets marks span them — otherwise
+      // `\texttt{report\_final}` comes back out as three nodes and
+      // serializes to `\texttt{report}\_\texttt{final}`.
+      const asText = macroAsText(n, printRaw)
+      if (asText !== null) {
+        pushLiteral(asText)
+        continue
+      }
       flushText()
       // Some inline macros (\cite, \citep, \ref, \cref, \href, …) need a
       // following `{...}` argument. unified-latex doesn't know every
@@ -1756,7 +1872,7 @@ function inlineNodes(nodes: AstNodeArr, printRaw: (n: AstNodeArr) => string): PM
     } else if (n.type === 'parbreak') {
       // Should be handled at block level — if it leaks here, just emit
       // a space so we don't lose word boundaries.
-      textBuf += ' '
+      srcBuf += ' '
     }
   }
 
@@ -1830,6 +1946,72 @@ function absorbTrailingArg(
   return { macro, consumed: 0 }
 }
 
+// The original bytes inside a macro's final `{…}` argument, or null when the
+// node was synthesised and has no source position to slice.
+function lastArgSource(macro: any, printRaw: (n: AstNodeArr) => string): string | null {
+  const span = spanOf(macro)
+  if (!span) return null
+  const raw = sourceText.slice(span[0], span[1])
+  if (!raw.endsWith('}')) return null
+  // Walk back from the closing brace to its partner. Scanning forward for
+  // the first `{` would stop at a nested one — a footnote citing a key ends
+  // in `\citep{key}.}`, whose last `{` belongs to the citation.
+  let depth = 0
+  for (let i = raw.length - 1; i >= 0; i--) {
+    const c = raw[i]
+    if ((c === '}' || c === '{') && raw[i - 1] === '\\') continue
+    if (c === '}') depth++
+    else if (c === '{') {
+      depth--
+      if (depth === 0) return raw.slice(i + 1, -1)
+    }
+  }
+  void printRaw
+  return null
+}
+
+// Macros that are really just characters: escaped reserved characters
+// (`\%`), accents (`\c{c}`), and named glyphs (`\ss`, `\textemdash`).
+// Returns the text they stand for, or null when the macro isn't one of them.
+//
+// This is the fix for a whole family of corruptions. Previously `\c{c}`
+// parsed as an unknown zero-arg macro `\c` plus a loose `{c}` group, and the
+// serializer wrote them back adjacent as `\ccois` — an undefined control
+// sequence that breaks the build.
+function macroAsText(macro: any, printRaw: (n: AstNodeArr) => string): string | null {
+  const name = macro.content as string
+  const args = (macro.args ?? []).filter((a: any) => a.openMark === '{')
+
+  // `\%`, `\&`, `\_`, … — the macro name *is* the character.
+  if (ESCAPED_CHARS.has(name)) return name
+
+  if (isAccentMacro(name)) {
+    // The argument may itself be a macro (`\"{\i}` → dotless i), so convert
+    // it through the same path before composing.
+    const inner = args[0]?.content ?? []
+    let base = ''
+    for (const c of inner) {
+      if (c.type === 'string') base += c.content as string
+      else if (c.type === 'macro') base += macroAsText(c, printRaw) ?? ''
+      else if (c.type === 'group') base += printRaw(c.content ?? [])
+    }
+    const composed = applyAccent(name, base)
+    // An accent with an argument we couldn't read (`\c{\somemacro}`) falls
+    // through to the generic macro path rather than losing the argument.
+    if (composed === null) return null
+    return composed
+  }
+
+  // Zero-argument glyph macros. `\ss`, `\AA`, `\textemdash`, … A trailing
+  // `{}` (the idiomatic `\ss{}e` spacing guard) is a separate empty group in
+  // the AST and simply renders as nothing, so it needs no handling here.
+  if (args.length === 0) {
+    const glyph = symbolFor(name)
+    if (glyph !== undefined) return glyph
+  }
+  return null
+}
+
 function macroToInline(
   macro: any,
   printRaw: (n: AstNodeArr) => string
@@ -1842,7 +2024,10 @@ function macroToInline(
   // round-trips unchanged.
   if (name === 'footnote' || name === 'thanks' || name === 'footnotetext') {
     const arg = (macro.args ?? []).filter((a: any) => a.openMark === '{').pop()
-    const source = printRaw(arg?.content ?? []).trim()
+    // Byte-exact where we can be: printRaw normalises the body, so a note
+    // containing math came back with its operator spacing shifted
+    // (`$e^{i\pi} + 1$` → `$e^{i\pi}+ 1$`) on every save.
+    const source = lastArgSource(macro, printRaw) ?? printRaw(arg?.content ?? []).trim()
     return latexSchema.nodes.footnote.create({ source, cmd: name })
   }
   if (name === 'footnotemark') {
@@ -1884,19 +2069,25 @@ function macroToInline(
       cmd: name
     })
   }
-  if (name === 'textbf' || name === 'textit' || name === 'emph' || name === 'texttt' || name === 'textsc') {
+  const MARK_BY_MACRO: Record<string, string> = {
+    textbf: 'strong',
+    textit: 'em',
+    emph: 'em',
+    texttt: 'code',
+    textsc: 'smallcaps',
+    textsuperscript: 'superscript',
+    textsubscript: 'subscript',
+    underline: 'underline'
+  }
+  if (MARK_BY_MACRO[name]) {
     const arg = (macro.args ?? []).find((a: any) => a.openMark === '{')
     const inner = inlineNodes(arg?.content ?? [], printRaw)
-    const markName =
-      name === 'textbf' ? 'strong'
-      : name === 'texttt' ? 'code'
-      : name === 'textsc' ? 'smallcaps'
-      : 'em'
-    return inner.map((node) => {
-      if (!node.isText) return node
-      const marks = node.marks.concat(latexSchema.marks[markName].create())
-      return latexSchema.text(node.text!, marks)
-    })
+    const markName = MARK_BY_MACRO[name]
+    // Marks go on every inline child, atoms included: `\emph{The \TeX{}book}`
+    // should italicise the `\TeX` atom too, and it lets the serializer emit
+    // one `\emph{…}` around the whole run instead of three.
+    const mark = latexSchema.marks[markName].create()
+    return inner.map((node) => node.mark(node.marks.concat(mark)))
   }
 
   // \href{url}{text} — render visible text with a link mark carrying the URL.
@@ -1906,11 +2097,8 @@ function macroToInline(
     const textArg = args[1]?.content ?? args[0]?.content ?? []
     const inner = inlineNodes(textArg, printRaw)
     if (!url) return inner
-    return inner.map((node) => {
-      if (!node.isText) return node
-      const marks = node.marks.concat(latexSchema.marks.link.create({ href: url }))
-      return latexSchema.text(node.text!, marks)
-    })
+    const linkMark = latexSchema.marks.link.create({ href: url })
+    return inner.map((node) => node.mark(node.marks.concat(linkMark)))
   }
 
   // \url{...} — show the URL itself with a link mark.

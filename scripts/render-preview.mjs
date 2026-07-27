@@ -34,6 +34,29 @@ const parserUrl = pathToFileURL(
   join(root, 'src/renderer/src/editor/wysiwyg/latex-to-doc.ts')
 ).href
 const { parseLatexToDoc } = await import(parserUrl)
+const { latexSchema } = await import(
+  pathToFileURL(join(root, 'src/renderer/src/editor/wysiwyg/schema.ts')).href
+)
+
+// The rich renderers (tabular, algorithm) build real DOM nodes, and the
+// label registry is plain data. Reusing them — instead of reimplementing
+// them here — is what keeps this preview honest: if the editor renders a
+// booktabs table, so does the preview, from the same code.
+const { JSDOM } = await import('jsdom')
+const dom = new JSDOM('<!doctype html><html><body></body></html>')
+globalThis.document = dom.window.document
+globalThis.window = dom.window
+globalThis.Node = dom.window.Node
+globalThis.HTMLElement = dom.window.HTMLElement
+
+const wysiwyg = (name) =>
+  pathToFileURL(join(root, `src/renderer/src/editor/wysiwyg/${name}`)).href
+const { isTabularSource, renderTabular } = await import(wysiwyg('renderers/tabular.ts'))
+const { isAlgorithmSource, renderAlgorithm } = await import(wysiwyg('renderers/algorithm.ts'))
+const labelRegistry = await import(wysiwyg('labelRegistry.ts'))
+const { formatNumberList, formatRefs } = await import(wysiwyg('ref-format.ts'))
+const { BUILTIN_MATH_MACROS, injectEquationTags, setMathMacros, stripMathWrappers } =
+  await import(wysiwyg('math-macros.ts'))
 
 // KaTeX server-side rendering. We import the bundled CSS so the
 // generated HTML matches what the editor produces.
@@ -56,17 +79,36 @@ const designTokensCss = readFileSync(
   'utf-8'
 )
 
+// The app's own stylesheet, so the preview shows the real thing: booktabs
+// rules, theorem callouts, caption prefixes and float layout all live here.
+// Scoped under `.wysiwyg-editor .ProseMirror` in places, so the rendered
+// pane carries both class names.
+const appCss = readFileSync(join(root, 'src/renderer/src/App.css'), 'utf-8')
+
 const fixtures = readdirSync(fixturesDir).filter((f) => f.endsWith('.tex'))
 fixtures.sort()
 
 const indexLinks = []
+// Node → absolute position, so the registry's per-position numbering can be
+// looked up while rendering. Reset for each fixture.
+let posOf = new Map()
+let captionOwnerPos = undefined
 for (const file of fixtures) {
   const tex = readFileSync(join(fixturesDir, file), 'utf-8')
   let bodyHtml = ''
   let parseError = null
   try {
     const { doc, mathMacros } = await parseLatexToDoc(tex)
-    bodyHtml = renderDoc(doc, mathMacros ?? {})
+    // Same numbering the editor shows: equation tags, float numbers,
+    // citation indices and resolved \cref text all come from here.
+    setMathMacros(mathMacros ?? {})
+    labelRegistry.rebuild(doc)
+    posOf = new Map()
+    doc.descendants((node, pos) => {
+      posOf.set(node, pos)
+      return true
+    })
+    bodyHtml = renderDoc(doc, { ...BUILTIN_MATH_MACROS, ...(mathMacros ?? {}) })
   } catch (err) {
     parseError = err
     bodyHtml = `<pre class="error">Parse failed: ${escapeHtml(String(err))}</pre>`
@@ -151,8 +193,10 @@ function renderBlock(node, macros) {
     }
     case 'paragraph':
       return `<p>${renderInline(node, macros)}</p>`
-    case 'mathBlock':
-      return `<div class="math-block">${renderMath(node.attrs.latex ?? '', true, macros)}</div>`
+    case 'mathBlock': {
+      const tags = labelRegistry.getEquationNumbersForPos(posOf.get(node)) ?? []
+      return `<div class="math-block">${renderMath(node.attrs.latex ?? '', true, macros, tags)}</div>`
+    }
     case 'figure': {
       const src = node.attrs.src ?? ''
       const cap = escapeHtml(node.attrs.caption ?? '')
@@ -161,8 +205,16 @@ function renderBlock(node, macros) {
   ${cap ? `<figcaption class="figure-block__caption">${cap}</figcaption>` : ''}
 </figure>`
     }
-    case 'rawLatex':
-      return `<pre class="raw-latex-block">${escapeHtml(node.attrs.source ?? '')}</pre>`
+    case 'rawLatex': {
+      const source = node.attrs.source ?? ''
+      if (isTabularSource(source)) {
+        return `<div class="raw-latex-block raw-latex-block--rich">${renderTabular(source).outerHTML}</div>`
+      }
+      if (isAlgorithmSource(source)) {
+        return `<div class="raw-latex-block raw-latex-block--rich">${renderAlgorithm(source).outerHTML}</div>`
+      }
+      return `<pre class="raw-latex-block">${escapeHtml(source)}</pre>`
+    }
     case 'codeBlock': {
       const lang = node.attrs.language || node.attrs.env || 'verbatim'
       return `<div class="code-block">
@@ -171,16 +223,27 @@ function renderBlock(node, macros) {
 </div>`
     }
     case 'floatBlock': {
+      // Captions are numbered against their enclosing float's position.
+      const previousOwner = captionOwnerPos
+      captionOwnerPos = posOf.get(node)
       let inner = ''
       node.forEach((child) => (inner += renderBlock(child, macros)))
+      captionOwnerPos = previousOwner
       const kind = node.attrs.kind ?? 'table'
       const label = node.attrs.label ?? ''
       return `<div class="float-block" data-kind="${escapeHtml(kind)}"${
         node.attrs.centering ? ' data-centering="1"' : ''
       }${label ? ` data-label="${escapeHtml(label)}"` : ''}>${inner}</div>`
     }
-    case 'caption':
-      return `<figcaption class="float-block__caption">${renderInline(node, macros)}</figcaption>`
+    case 'caption': {
+      // Mirrors CaptionNodeView: the "Table 1: " prefix is rendered, not
+      // stored, and comes from the label registry's float numbering.
+      const num = labelRegistry.getFloatNumberForPos(captionOwnerPos)
+      const prefix = num ? `${num.kindLabel} ${num.number}: ` : ''
+      return `<figcaption class="float-block__caption"><span class="float-block__caption-prefix">${escapeHtml(
+        prefix
+      )}</span>${renderInline(node, macros)}</figcaption>`
+    }
     case 'figureImage':
       return `<img data-figure-image class="figure-block__image figure-block__image--empty" alt="figure" data-src="${escapeHtml(
         node.attrs.src ?? ''
@@ -204,15 +267,19 @@ function renderBlock(node, macros) {
         node.attrs.kind ?? 'literal'
       )}">${renderInline(node, macros)}</div>`
     case 'listBlock': {
+      // Mirror the schema's toDOM so enumitem label styles and description
+      // terms look the same here as in the editor.
+      const attrs = latexSchema.nodes.listBlock.spec.toDOM(node)[1]
       const tag = node.attrs.kind === 'enumerate' ? 'ol' : 'ul'
       let inner = ''
       node.forEach((item) => (inner += renderBlock(item, macros)))
-      return `<${tag}>${inner}</${tag}>`
+      return `<${tag}${attrsToHtml(attrs)}>${inner}</${tag}>`
     }
     case 'listItem': {
+      const marker = node.attrs.marker
       let inner = ''
       node.forEach((child) => (inner += renderBlock(child, macros)))
-      return `<li>${inner}</li>`
+      return `<li${marker ? ` data-marker="${escapeHtml(marker)}"` : ''}>${inner}</li>`
     }
     case 'theoremEnv': {
       const kind = node.attrs.kind ?? 'theorem'
@@ -253,6 +320,12 @@ function renderBlock(node, macros) {
   }
 }
 
+function attrsToHtml(attrs) {
+  return Object.entries(attrs ?? {})
+    .map(([k, v]) => ` ${k}="${escapeHtml(String(v))}"`)
+    .join('')
+}
+
 function capitalize(s) {
   return s.length === 0 ? s : s[0].toUpperCase() + s.slice(1)
 }
@@ -267,20 +340,36 @@ function renderInline(node, macros = {}) {
         case 'mathInline':
           html += `<span class="math-inline">${renderMath(child.attrs.latex ?? '', false, macros)}</span>`
           break
-        case 'citation':
-          html += `<span class="citation-chip">[${escapeHtml((child.attrs.keys ?? []).join(', '))}]</span>`
+        case 'citation': {
+          // Same text the editor shows: resolved numbers, natbib-style
+          // range compression, keys only when a key doesn't resolve.
+          const keys = child.attrs.keys ?? []
+          const resolved = keys.map((k) => labelRegistry.getCitation(k))
+          const text = resolved.every(Boolean)
+            ? `[${formatNumberList(resolved.map((r) => r.number).sort((a, b) => a - b))}]`
+            : `[${keys.join(', ')}]`
+          html += `<span class="citation">${escapeHtml(text)}</span>`
           break
-        case 'crossRef':
-          html += `<span class="cross-ref-chip">→ ${escapeHtml(child.attrs.label ?? '')}</span>`
+        }
+        case 'crossRef': {
+          const keys = child.attrs.keys?.length ? child.attrs.keys : [child.attrs.label ?? '']
+          const text = formatRefs(
+            child.attrs.cmd ?? 'ref',
+            keys.map((k) => ({ key: k, ref: labelRegistry.getLabel(k) }))
+          )
+          html += `<span class="cross-ref">${escapeHtml(text)}</span>`
           break
+        }
         case 'footnote':
           html += `<sup class="footnote-marker" data-cmd="${escapeHtml(
             child.attrs.cmd ?? 'footnote'
           )}" title="${escapeHtml(child.attrs.source ?? '')}"></sup>`
           break
-        case 'rawInline':
-          html += `<span data-raw-inline>${escapeHtml(child.attrs.display ?? '')}</span>`
+        case 'rawInline': {
+          const attrs = latexSchema.nodes.rawInline.spec.toDOM(child)[1]
+          html += `<span${attrsToHtml(attrs)}>${escapeHtml(child.attrs.display ?? '')}</span>`
           break
+        }
         case 'hardBreak':
           html += '<br>'
           break
@@ -300,19 +389,22 @@ function wrapMarks(text, marks) {
       case 'strong': result = `<strong>${result}</strong>`; break
       case 'code': result = `<code>${result}</code>`; break
       case 'smallcaps': result = `<span style="font-variant: small-caps">${result}</span>`; break
+      case 'superscript': result = `<sup>${result}</sup>`; break
+      case 'subscript': result = `<sub>${result}</sub>`; break
+      case 'underline': result = `<u>${result}</u>`; break
       case 'link': result = `<a href="${escapeHtml(mark.attrs.href ?? '')}">${result}</a>`; break
     }
   }
   return result
 }
 
-function renderMath(latex, displayMode, macros = {}) {
+function renderMath(latex, displayMode, macros = {}, tags = []) {
   // Strip `\[...\]` since KaTeX doesn't recognize the delimiters; envs
   // pass through verbatim (KaTeX handles `\begin{equation}` etc).
   let src = latex.trim()
   if (displayMode) {
-    const m = /^\\\[([\s\S]*?)\\\]$/.exec(src)
-    if (m) src = m[1].trim()
+    src = stripMathWrappers(src)
+    src = injectEquationTags(src, tags)
   }
   try {
     return katex.renderToString(src, {
@@ -346,6 +438,7 @@ function pageTemplate({ title, katexCss, designTokensCss, rendered, source }) {
 <title>${escapeHtml(title)} — preview</title>
 <style>
 ${designTokensCss}
+${appCss}
 ${katexCss}
 
 body {
@@ -584,8 +677,10 @@ body {
   <a href="./index.html">← all fixtures</a>
   <strong>${escapeHtml(title)}</strong>
 </div>
-<div class="pane pane--rendered" style="padding-top: 50px">
+<div class="pane pane--rendered wysiwyg-editor" style="padding-top: 50px">
+<div class="ProseMirror">
   ${rendered}
+</div>
 </div>
 <div class="pane pane--source" style="padding-top: 50px">${escapeHtml(source)}</div>
 </body>

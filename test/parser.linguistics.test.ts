@@ -48,8 +48,9 @@ describe('parser — linguistics paper (lingmacros + tree-dvips)', () => {
   it('keeps the body text readable around the rawLatex islands', async () => {
     const { doc } = await parseLatexToDoc(fixture('linguistics-paper.tex'))
     const text = flatText(doc)
-    expect(text).toContain("Don't forget to include examples of topicalization")
-    expect(text).toContain("I'll just assume a tree structure")
+    // The apostrophe comes back as the curly quote LaTeX actually sets.
+    expect(text).toContain('Don\u2019t forget to include examples of topicalization')
+    expect(text).toContain('I\u2019ll just assume a tree structure')
     expect(text).toContain('Mood changes when there is a topic')
   })
 })

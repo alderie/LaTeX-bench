@@ -1,5 +1,5 @@
 import katex from 'katex'
-import { getMathMacros } from '../nodeviews/MathNodeView'
+import { getMathMacros } from '../math-macros'
 
 // Walk a string with brace-depth awareness and find every position of a
 // top-level `$` (math toggle). Used to slice content into alternating

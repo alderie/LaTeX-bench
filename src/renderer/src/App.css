@@ -473,9 +473,75 @@
 .wysiwyg-editor .ProseMirror a:hover {
   text-decoration-color: var(--text-primary);
 }
+/* `\textsuperscript` / `\textsubscript` / `\underline`. Sized down and
+   nudged off the baseline the way a text renderer sets them, rather than
+   the browser default which stretches the line box. */
+.wysiwyg-editor .ProseMirror sup,
+.wysiwyg-editor .ProseMirror sub {
+  font-size: 0.72em;
+  line-height: 0;
+  position: relative;
+  vertical-align: baseline;
+}
+.wysiwyg-editor .ProseMirror sup { top: -0.5em; }
+.wysiwyg-editor .ProseMirror sub { bottom: -0.25em; }
+.wysiwyg-editor .ProseMirror u {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 .wysiwyg-editor .ProseMirror ul,
 .wysiwyg-editor .ProseMirror ol { padding-left: 1.5em; margin: 0.4em 0 0.9em 0; }
 .wysiwyg-editor .ProseMirror li { margin: 0.2em 0; }
+/* `\item[Term]` — a description-list term, or an enumitem label override.
+   The marker is stored on the item and rendered here; without this the
+   terms were parsed, round-tripped, and then invisible on screen. */
+.wysiwyg-editor .ProseMirror li[data-marker] {
+  list-style: none;
+}
+.wysiwyg-editor .ProseMirror li[data-marker] > p:first-child::before {
+  content: attr(data-marker) ' ';
+  font-weight: 650;
+}
+.wysiwyg-editor .ProseMirror ul[data-kind='description'] { padding-left: 1.2em; }
+
+/* enumitem `label=(\roman*)` and friends: rebuild the marker from a CSS
+   counter, with the literal text around it carried in custom properties
+   the schema sets on the list. */
+.wysiwyg-editor .ProseMirror ol[data-label-kind] {
+  list-style: none;
+  counter-reset: enumitem;
+}
+.wysiwyg-editor .ProseMirror ol[data-label-kind] > li {
+  counter-increment: enumitem;
+  position: relative;
+}
+.wysiwyg-editor .ProseMirror ol[data-label-kind] > li::before {
+  position: absolute;
+  left: -2.1em;
+  width: 1.8em;
+  text-align: right;
+  content: var(--label-prefix, '') counter(enumitem, decimal) var(--label-suffix, '');
+}
+.wysiwyg-editor .ProseMirror ol[data-label-kind='lower-roman'] > li::before {
+  content: var(--label-prefix, '') counter(enumitem, lower-roman) var(--label-suffix, '');
+}
+.wysiwyg-editor .ProseMirror ol[data-label-kind='upper-roman'] > li::before {
+  content: var(--label-prefix, '') counter(enumitem, upper-roman) var(--label-suffix, '');
+}
+.wysiwyg-editor .ProseMirror ol[data-label-kind='lower-alpha'] > li::before {
+  content: var(--label-prefix, '') counter(enumitem, lower-alpha) var(--label-suffix, '');
+}
+.wysiwyg-editor .ProseMirror ol[data-label-kind='upper-alpha'] > li::before {
+  content: var(--label-prefix, '') counter(enumitem, upper-alpha) var(--label-suffix, '');
+}
+
+/* A nested list sits tight under its parent item — the outer list already
+   supplies the vertical rhythm, and the default block margins would leave
+   it floating away from the line that introduces it. */
+.wysiwyg-editor .ProseMirror li > ul,
+.wysiwyg-editor .ProseMirror li > ol { margin: 0.2em 0 0.2em 0; }
+.wysiwyg-editor .ProseMirror li > p { margin-bottom: 0.35em; }
+.wysiwyg-editor .ProseMirror li > p:last-child { margin-bottom: 0; }
 .wysiwyg-editor .ProseMirror :focus { outline: none; }
 
 /* Math nodes — render inline alongside text, no extra padding so the
@@ -1426,7 +1492,7 @@
 
 /* Unknown zero-arg macros show their source, dimmed, so it's obvious the
    editor didn't understand them rather than silently dropping them. */
-[data-raw-inline]:not(:empty) {
+[data-raw-inline]:not(:empty):not([data-known]) {
   font-family: var(--font-mono);
   font-size: 0.88em;
 }

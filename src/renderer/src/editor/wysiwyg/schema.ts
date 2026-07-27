@@ -11,6 +11,37 @@ import { Schema, NodeSpec, MarkSpec } from 'prosemirror-model'
 //
 // Inline atoms: mathInline, citation, crossRef. Marks: em, strong, code.
 
+// enumitem's `label=` key, e.g. `label=(\roman*)` or `label=\Alph*)`.
+// Returns the counter style plus whatever literal text surrounds it, so the
+// marker can be reproduced with a CSS counter.
+const ENUM_COUNTERS: Record<string, string> = {
+  roman: 'lower-roman',
+  Roman: 'upper-roman',
+  alph: 'lower-alpha',
+  Alph: 'upper-alpha',
+  arabic: 'decimal'
+}
+
+function parseEnumitemLabel(
+  options: string
+): { counter: string; prefix: string; suffix: string } | null {
+  if (!options) return null
+  const m = /label\s*=\s*([^,\]]*)/.exec(options)
+  if (!m) return null
+  const spec = m[1].trim().replace(/^\{|\}$/g, '')
+  const counterMatch = /\\(roman|Roman|alph|Alph|arabic)\*/.exec(spec)
+  if (!counterMatch) return null
+  const style = ENUM_COUNTERS[counterMatch[1]]
+  const at = spec.indexOf(counterMatch[0])
+  // Quotes would terminate the CSS string the marker is built from.
+  const clean = (s: string): string => s.replace(/["\\]/g, '')
+  return {
+    counter: style,
+    prefix: clean(spec.slice(0, at)),
+    suffix: clean(spec.slice(at + counterMatch[0].length))
+  }
+}
+
 const nodes: { [name: string]: NodeSpec } = {
   doc: { content: 'block+' },
 
@@ -233,11 +264,21 @@ const nodes: { [name: string]: NodeSpec } = {
     toDOM: (node) => {
       const kind = node.attrs.kind as string
       const tag = kind === 'enumerate' ? 'ol' : 'ul'
+      const label = parseEnumitemLabel(node.attrs.options as string)
       return [
         tag,
         {
           'data-kind': kind,
-          ...(node.attrs.options ? { 'data-options': node.attrs.options as string } : {})
+          ...(node.attrs.options ? { 'data-options': node.attrs.options as string } : {}),
+          // enumitem's `[label=(\roman*)]` drives the marker. Without this
+          // the list rendered as "1. 2. 3." no matter what the document
+          // asked for — a visible mismatch with the compiled PDF.
+          ...(label
+            ? {
+                'data-label-kind': label.counter,
+                style: `--label-prefix:"${label.prefix}";--label-suffix:"${label.suffix}"`
+              }
+            : {})
         },
         0
       ]
@@ -245,7 +286,11 @@ const nodes: { [name: string]: NodeSpec } = {
   },
 
   listItem: {
-    content: 'paragraph (paragraph | listBlock)*',
+    // A list item is a block container, not a single paragraph: LaTeX items
+    // routinely hold nested lists, display math, and several paragraphs.
+    // Modelling it as `paragraph` only meant `buildList` flattened the body
+    // through the inline path and a nested `itemize` was silently deleted.
+    content: 'paragraph (paragraph | listBlock | mathBlock | codeBlock | rawLatex | figure | figureImage | floatBlock)*',
     defining: true,
     // `\item[term]` in a description list (and enumitem's `[label]`
     // override elsewhere) — kept verbatim so it round-trips.
@@ -640,11 +685,23 @@ const nodes: { [name: string]: NodeSpec } = {
         }
       }
     ],
-    toDOM: (node) => [
-      'span',
-      { 'data-raw-inline': '', 'data-source': node.attrs.source as string },
-      node.attrs.display as string
-    ]
+    toDOM: (node) => {
+      const display = node.attrs.display as string
+      // An atom we DID understand (`\LaTeX` → "LaTeX", `\quad` → a space)
+      // should read as prose. Only genuinely unknown macros — the ones
+      // showing their own source — get the dimmed monospace treatment that
+      // says "the editor didn't understand this".
+      const known = display !== '' && !display.startsWith('\\')
+      return [
+        'span',
+        {
+          'data-raw-inline': '',
+          'data-source': node.attrs.source as string,
+          ...(known ? { 'data-known': '1' } : {})
+        },
+        display
+      ]
+    }
   },
 
   citation: {
@@ -758,6 +815,24 @@ const marks: { [name: string]: MarkSpec } = {
   smallcaps: {
     parseDOM: [{ style: 'font-variant=small-caps' }],
     toDOM: () => ['span', { style: 'font-variant: small-caps' }, 0]
+  },
+  // `\textsuperscript{…}` / `\textsubscript{…}` / `\underline{…}`. Modelled
+  // as marks rather than atoms so the text inside stays editable and
+  // searchable, and so the macro survives the round-trip instead of
+  // flattening to bare text.
+  superscript: {
+    excludes: 'superscript subscript',
+    parseDOM: [{ tag: 'sup:not([data-footnote])' }],
+    toDOM: () => ['sup', 0]
+  },
+  subscript: {
+    excludes: 'superscript subscript',
+    parseDOM: [{ tag: 'sub' }],
+    toDOM: () => ['sub', 0]
+  },
+  underline: {
+    parseDOM: [{ tag: 'u' }, { style: 'text-decoration=underline' }],
+    toDOM: () => ['u', 0]
   },
   link: {
     attrs: { href: { default: '' } },

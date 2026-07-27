@@ -17,7 +17,7 @@ import { stex } from '@codemirror/legacy-modes/mode/stex'
 import { linter, type Diagnostic } from '@codemirror/lint'
 import type { Completion, CompletionContext, CompletionResult } from '@codemirror/autocomplete'
 import { EditorView } from '@codemirror/view'
-import type { EditorState, Extension } from '@codemirror/state'
+import type { EditorState, Extension, Text } from '@codemirror/state'
 import { catalogueEntries } from '../wysiwyg/math-complete'
 
 /** Environments worth offering before the author has typed anything. */
@@ -98,6 +98,27 @@ const SECTION_RE = /^\s*\\(part|chapter|section|subsection|subsubsection)\*?\s*\
  * this proof away" and cheap enough to run per visible line.
  */
 export const latexFolding = foldService.of((state, lineStart, lineEnd) => {
+  // The fold gutter asks this for every visible line on every viewport
+  // change, and an unmatched `\begin` makes each ask scan to the end of the
+  // document. Cached per document version — `Text` is immutable, so an entry
+  // can never be stale, and a document that has changed simply gets a fresh
+  // (empty) map.
+  let cache = foldCache.get(state.doc)
+  if (!cache) foldCache.set(state.doc, (cache = new Map()))
+  const cached = cache.get(lineStart)
+  if (cached !== undefined) return cached
+  const computed = computeFold(state, lineStart, lineEnd)
+  cache.set(lineStart, computed)
+  return computed
+})
+
+const foldCache = new WeakMap<Text, Map<number, { from: number; to: number } | null>>()
+
+function computeFold(
+  state: EditorState,
+  lineStart: number,
+  lineEnd: number
+): { from: number; to: number } | null {
   const line = state.doc.lineAt(lineStart)
   const begin = BEGIN_RE.exec(line.text)
   if (begin) {
@@ -128,7 +149,7 @@ export const latexFolding = foldService.of((state, lineStart, lineEnd) => {
   }
   const last = state.doc.line(state.doc.lines)
   return last.to > lineEnd ? { from: lineEnd, to: last.to } : null
-})
+}
 
 const SECTION_RANK: Record<string, number> = {
   part: 0,
@@ -140,24 +161,51 @@ const SECTION_RANK: Record<string, number> = {
 
 // ── Completion ─────────────────────────────────────────────────────────
 
-/** Keys the document itself defines, so `\ref{` can offer them. */
-function documentKeys(text: string, kind: 'label' | 'cite'): string[] {
-  const pattern =
-    kind === 'label' ? /\\label\{([^}]+)\}/g : /\\bibitem(?:\[[^\]]*\])?\{([^}]+)\}/g
-  const keys = new Set<string>()
-  for (const match of text.matchAll(pattern)) keys.add(match[1].trim())
-  return [...keys]
+/**
+ * What the document declares, computed once per document version.
+ *
+ * All three scans want the whole file as a string, and `doc.toString()` on a
+ * long paper is not free. Keyed on the immutable `Text`, so the work happens
+ * on the first completion after an edit and never again for that version.
+ */
+interface DocumentIndex {
+  labels: string[]
+  cites: string[]
+  macros: string[]
+  environments: string[]
 }
 
-/** Macros the preamble declares, which are the ones worth reminding of. */
-function paperMacros(text: string): string[] {
-  const names = new Set<string>()
+const indexCache = new WeakMap<Text, DocumentIndex>()
+
+function indexDocument(doc: Text): DocumentIndex {
+  const cached = indexCache.get(doc)
+  if (cached) return cached
+
+  const text = doc.toString()
+  const labels = new Set<string>()
+  const cites = new Set<string>()
+  const macros = new Set<string>()
+  const environments = new Set<string>()
+
+  for (const match of text.matchAll(/\\label\{([^}]+)\}/g)) labels.add(match[1].trim())
+  for (const match of text.matchAll(/\\bibitem(?:\[[^\]]*\])?\{([^}]+)\}/g)) {
+    cites.add(match[1].trim())
+  }
   for (const match of text.matchAll(
     /\\(?:newcommand|renewcommand|providecommand|DeclareMathOperator)\*?\s*\{?\\([a-zA-Z@]+)\}?/g
   )) {
-    names.add(`\\${match[1]}`)
+    macros.add(`\\${match[1]}`)
   }
-  return [...names]
+  for (const match of text.matchAll(/\\begin\{([^}]*)\}/g)) environments.add(match[1])
+
+  const index: DocumentIndex = {
+    labels: [...labels],
+    cites: [...cites],
+    macros: [...macros],
+    environments: [...environments]
+  }
+  indexCache.set(doc, index)
+  return index
 }
 
 const MACRO_COMPLETIONS: Completion[] = catalogueEntries().map((entry) => ({
@@ -182,17 +230,19 @@ const MACRO_COMPLETIONS: Completion[] = catalogueEntries().map((entry) => ({
  * paper's own first.
  */
 export function latexCompletions(context: CompletionContext): CompletionResult | null {
-  const doc = context.state.doc.toString()
-
+  // Nothing below this point reads the document unless a trigger matched,
+  // and the read is cached per version when it does. This used to stringify
+  // the whole paper on every keystroke, matched or not.
   const keyed = context.matchBefore(/\\([a-zA-Z]+)\s*(?:\[[^\]]*\])?\{([^}{]*)$/)
   if (keyed) {
     const macro = /\\([a-zA-Z]+)/.exec(keyed.text)?.[1] ?? ''
     const kind = KEYED_MACROS[macro]
     if (kind) {
       const typed = keyed.text.slice(keyed.text.lastIndexOf('{') + 1)
+      const index = indexDocument(context.state.doc)
       return {
         from: keyed.to - typed.length,
-        options: documentKeys(doc, kind).map((key) => ({
+        options: (kind === 'cite' ? index.cites : index.labels).map((key) => ({
           label: key,
           type: kind === 'cite' ? 'constant' : 'variable',
           detail: kind === 'cite' ? 'bibitem' : 'label'
@@ -202,11 +252,16 @@ export function latexCompletions(context: CompletionContext): CompletionResult |
     }
     if (macro === 'begin' || macro === 'end') {
       const typed = keyed.text.slice(keyed.text.lastIndexOf('{') + 1)
-      const used = [...doc.matchAll(/\\begin\{([^}]*)\}/g)].map((m) => m[1])
-      const names = [...new Set([...used, ...COMMON_ENVIRONMENTS])]
+      const names = [
+        ...new Set([...indexDocument(context.state.doc).environments, ...COMMON_ENVIRONMENTS])
+      ]
       return {
         from: keyed.to - typed.length,
-        options: names.map((name) => ({ label: name, type: 'class', detail: 'environment' })),
+        options: names.map((name) => ({
+          label: name,
+          type: 'class',
+          detail: 'environment'
+        })),
         validFor: /^[^}]*$/
       }
     }
@@ -217,7 +272,7 @@ export function latexCompletions(context: CompletionContext): CompletionResult |
   // shortest thing to remind them of — the same rule the formula editor uses.
   const macro = context.matchBefore(/\\[a-zA-Z]*$/)
   if (!macro) return null
-  const own: Completion[] = paperMacros(doc).map((name) => ({
+  const own: Completion[] = indexDocument(context.state.doc).macros.map((name) => ({
     label: name,
     type: 'function',
     detail: 'from this paper',
@@ -302,7 +357,11 @@ export function latexDiagnostics(state: EditorState): Diagnostic[] {
   return diagnostics
 }
 
-export const latexLinter = linter((view) => latexDiagnostics(view.state))
+// Runs on a trailing delay: a squiggle that appears while you are still
+// typing the `\end` is a squiggle that is wrong more often than it is right.
+export const latexLinter = linter((view) => latexDiagnostics(view.state), {
+  delay: 600
+})
 
 // ── Typing helpers ─────────────────────────────────────────────────────
 

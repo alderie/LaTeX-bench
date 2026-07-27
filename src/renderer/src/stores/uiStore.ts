@@ -19,6 +19,11 @@ interface UiState {
   sidebarOpen: boolean
   paletteOpen: boolean
   findBarOpen: boolean
+  /** Whether the find widget is showing its replace row. */
+  findReplaceOpen: boolean
+  /** Bumped every time find is (re-)invoked, so the widget re-seeds itself. */
+  findRequest: number
+  minimapOpen: boolean
   symbolPaletteOpen: boolean
   /** Paper-view scale. 1 = 100%; the editor reads it as a CSS variable. */
   zoom: number
@@ -30,6 +35,11 @@ interface UiState {
   toggleSidebar: () => void
   setPaletteOpen: (open: boolean) => void
   setFindBarOpen: (open: boolean) => void
+  /** Open find (optionally with replace showing) and re-seed from selection. */
+  openFind: (withReplace?: boolean) => void
+  closeFind: () => void
+  toggleFindReplace: () => void
+  toggleMinimap: () => void
   setSymbolPaletteOpen: (open: boolean) => void
 }
 
@@ -55,6 +65,10 @@ export const useUiStore = create<UiState>()(
     sidebarOpen: localStorage.getItem('sidebarOpen.v2') === 'true',
     paletteOpen: false,
     findBarOpen: false,
+    findReplaceOpen: false,
+    findRequest: 0,
+    // On by default — a minimap you have to discover isn't one.
+    minimapOpen: localStorage.getItem('minimap') !== 'false',
     symbolPaletteOpen: false,
     zoom: readStoredZoom(),
 
@@ -98,6 +112,31 @@ export const useUiStore = create<UiState>()(
     setFindBarOpen: (open) =>
       set((s) => {
         s.findBarOpen = open
+        if (!open) s.findReplaceOpen = false
+      }),
+    // Ctrl+F on an already-open widget re-seeds it from the selection and
+    // re-focuses the field rather than closing it — the same key pressed
+    // twice in VS Code never leaves you with the bar gone and your query
+    // lost, and the old toggle did exactly that.
+    openFind: (withReplace = false) =>
+      set((s) => {
+        s.findBarOpen = true
+        if (withReplace) s.findReplaceOpen = true
+        s.findRequest += 1
+      }),
+    closeFind: () =>
+      set((s) => {
+        s.findBarOpen = false
+        s.findReplaceOpen = false
+      }),
+    toggleFindReplace: () =>
+      set((s) => {
+        s.findReplaceOpen = !s.findReplaceOpen
+      }),
+    toggleMinimap: () =>
+      set((s) => {
+        s.minimapOpen = !s.minimapOpen
+        localStorage.setItem('minimap', String(s.minimapOpen))
       }),
     setSymbolPaletteOpen: (open) =>
       set((s) => {

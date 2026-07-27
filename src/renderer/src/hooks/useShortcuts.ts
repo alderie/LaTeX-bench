@@ -6,7 +6,8 @@ import { useUiStore } from '../stores/uiStore'
 //
 //   Ctrl/Cmd + B  → manual build
 //   Ctrl/Cmd + P  → command palette
-//   Ctrl/Cmd + F  → find bar
+//   Ctrl/Cmd + F  → find widget
+//   Ctrl/Cmd + H  → find widget, with replace showing
 //   Ctrl/Cmd + \  → symbol palette
 //   Ctrl/Cmd + S  → flush save now (in case the user wants a clean state)
 //   Ctrl/Cmd + =/-  → zoom the paper view in / out
@@ -47,10 +48,18 @@ export function useShortcuts(): void {
         return
       }
 
+      // Open, never toggle. Ctrl+F on an already-open widget re-seeds it
+      // from the selection and puts the caret back in the field — pressing
+      // it twice must not throw away the query you just typed.
       if (key === 'f') {
         e.preventDefault()
-        const ui = useUiStore.getState()
-        ui.setFindBarOpen(!ui.findBarOpen)
+        useUiStore.getState().openFind()
+        return
+      }
+
+      if (key === 'h') {
+        e.preventDefault()
+        useUiStore.getState().openFind(true)
         return
       }
 

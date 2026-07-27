@@ -567,8 +567,18 @@
   overflow: hidden;
   display: flex;
 }
-.source-editor__host > .cm-editor {
+/* The editor and the minimap are siblings in a flex row rather than the
+   minimap being an overlay: the text then wraps to the space it actually
+   has, instead of wrapping under a strip that covers it. */
+.source-editor__scroll {
   flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+}
+.source-editor__scroll > .cm-editor {
+  flex: 1;
+  min-width: 0;
   min-height: 0;
 }
 
@@ -600,6 +610,35 @@
   font-size: 10.5px;
   opacity: 0.8;
   white-space: nowrap;
+}
+/* The section the caret is in. Truncated rather than allowed to push the
+   rest of the status line around as you scroll through headings. */
+.source-editor__crumb {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+.source-editor__status-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 18px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 0;
+}
+.source-editor__status-button:hover {
+  background: var(--overlay-hover);
+  color: var(--text-primary);
+}
+.source-editor__status-button--on {
+  color: var(--editor-cursor);
 }
 
 /* ── WYSIWYG editor ───────────────────────────────────────────────── */
@@ -3429,55 +3468,189 @@ td.source-cell--editing:hover {
   border-color: var(--text-tertiary);
 }
 
-/* ── Find bar ─────────────────────────────────────────────────────── */
+/* ── Find / replace widget ────────────────────────────────────────────
+   VS Code's shape, because it is the shape the muscle memory expects: one
+   panel pinned to the top-right of the editor, a chevron that reveals the
+   replace row, the three toggles inside the field, and the match count
+   between the field and the arrows. */
 
-.find-bar {
+.find-widget {
   position: fixed;
-  top: 70px;
-  right: 14px;
+  top: 66px;
+  right: 18px;
+  display: flex;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 4px 6px 4px 2px;
   background: var(--bg-primary);
   border: 1px solid var(--border-color);
-  border-radius: 6px;
-  padding: 4px 6px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  box-shadow: var(--shadow-sm);
+  border-radius: 8px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.14);
   z-index: 180;
 }
 
-.find-bar__input {
+.find-widget__expand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  align-self: stretch;
   border: 0;
+  border-radius: 5px;
   background: transparent;
-  font: inherit;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 0;
+}
+.find-widget__expand:hover {
+  background: var(--overlay-hover);
+  color: var(--text-primary);
+}
+
+.find-widget__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.find-widget__row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* The field is a box that *contains* the toggles, so they read as modifiers
+   of the query rather than as more buttons in the row. */
+.find-widget__field {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 0 3px 0 8px;
+  height: 26px;
+  width: 260px;
+  background: var(--bg-secondary);
+  border: 1px solid transparent;
+  border-radius: 5px;
+  transition: border-color 0.12s ease;
+}
+.find-widget__field:focus-within {
+  border-color: var(--editor-cursor);
+}
+.find-widget__field--error,
+.find-widget__field--error:focus-within {
+  border-color: var(--status-error);
+}
+/* A query with no hits: stated by the count, echoed by the field, so you see
+   it whether you were looking at the field or at the number. */
+.find-widget__field--empty,
+.find-widget__field--empty:focus-within {
+  border-color: var(--status-warn);
+}
+
+.find-widget__input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  font-family: var(--font-mono);
   font-size: 12px;
   color: var(--text-primary);
-  padding: 4px 6px;
-  width: 200px;
-  outline: none;
 }
-.find-bar__toggle {
-  background: transparent;
+.find-widget__input::placeholder {
+  color: var(--text-tertiary);
+  font-family: var(--font-sans);
+}
+.find-widget__input:disabled {
+  color: var(--text-tertiary);
+}
+
+.find-widget__toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
   border: 0;
-  font-family: var(--font-mono);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 0;
+}
+.find-widget__toggle:hover {
+  background: var(--overlay-hover);
+  color: var(--text-primary);
+}
+.find-widget__toggle--on {
+  background: var(--math-edit-soft);
+  color: var(--editor-cursor);
+}
+
+.find-widget__count {
+  min-width: 68px;
+  padding: 0 4px;
   font-size: 11px;
-  color: var(--text-secondary);
-  padding: 2px 6px;
-  border-radius: 3px;
-  cursor: pointer;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.find-bar__toggle--active { background: var(--bg-secondary); color: var(--text-primary); }
-.find-bar__nav {
-  background: transparent;
+.find-widget__count--error {
+  color: var(--status-error);
+}
+
+.find-widget__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
   border: 0;
-  font: inherit;
-  font-size: 12px;
+  border-radius: 5px;
+  background: transparent;
   color: var(--text-secondary);
-  padding: 2px 6px;
-  border-radius: 3px;
   cursor: pointer;
+  padding: 0;
 }
-.find-bar__nav:hover { background: var(--overlay-hover); color: var(--text-primary); }
+.find-widget__button:hover:not(:disabled) {
+  background: var(--overlay-hover);
+  color: var(--text-primary);
+}
+.find-widget__button:disabled {
+  color: var(--text-tertiary);
+  opacity: 0.45;
+  cursor: default;
+}
+
+.find-widget__note {
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  padding-left: 4px;
+}
+
+/* ── Minimap ──────────────────────────────────────────────────────────
+   A canvas strip down the right edge of the source view. Fixed width: it is
+   a shape, not a second column of text, and a wider one would only be more
+   pixels of the same shape. */
+.source-minimap {
+  position: relative;
+  width: 76px;
+  flex-shrink: 0;
+  cursor: pointer;
+  background: var(--minimap-bg);
+  border-left: 1px solid var(--border-subtle);
+  overflow: hidden;
+}
+.source-minimap__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
 
 /* ── Code blocks (verbatim, lstlisting, minted, …) ────────────────────
    These used to render as raw-LaTeX blobs with visible \begin{lstlisting}

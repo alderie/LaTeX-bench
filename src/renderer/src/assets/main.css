@@ -85,6 +85,32 @@
   --code-number: #8a6100;
   --code-string: #8a6100;
 
+  /* Editor surface — selection, caret, matches.
+     The source view used to borrow --bg-secondary for its selection, which
+     is the *panel* colour: on a white page a selection drawn in it is very
+     nearly invisible. And the caret took --accent-color, which is pure
+     black, so it disappeared into the text it sits between. Both get their
+     own tokens, in the one hue the app already reserves for "you are
+     editing", so a selection reads as a selection at a glance. */
+  --editor-selection: rgba(79, 70, 229, 0.2);
+  --editor-selection-blur: rgba(79, 70, 229, 0.1);
+  --editor-cursor: #4f46e5;
+  --editor-line: rgba(79, 70, 229, 0.04);
+  /* Every occurrence of the find query, and the one you are standing on. */
+  --editor-match: rgba(234, 179, 8, 0.35);
+  --editor-match-current: rgba(249, 115, 22, 0.55);
+  --editor-match-outline: rgba(180, 83, 9, 0.7);
+  /* The word under the caret, echoed elsewhere on screen. */
+  --editor-occurrence: rgba(79, 70, 229, 0.12);
+
+  /* Minimap. Deliberately low-contrast: it is a shape of the document, not
+     something to read. */
+  --minimap-bg: rgba(0, 0, 0, 0.015);
+  --minimap-slider: rgba(0, 0, 0, 0.07);
+  --minimap-slider-hover: rgba(0, 0, 0, 0.13);
+  --minimap-text: rgba(17, 17, 17, 0.55);
+  --minimap-dim: rgba(17, 17, 17, 0.22);
+
   /* Status colors */
   --status-ok: #16a34a;
   --status-warn: #d97706;
@@ -129,6 +155,21 @@
   --code-env: #5eead4;
   --code-number: #d7b377;
   --code-string: #d7b377;
+
+  --editor-selection: rgba(129, 140, 248, 0.3);
+  --editor-selection-blur: rgba(129, 140, 248, 0.16);
+  --editor-cursor: #a5b4fc;
+  --editor-line: rgba(255, 255, 255, 0.035);
+  --editor-match: rgba(234, 179, 8, 0.3);
+  --editor-match-current: rgba(251, 146, 60, 0.55);
+  --editor-match-outline: rgba(253, 186, 116, 0.8);
+  --editor-occurrence: rgba(129, 140, 248, 0.18);
+
+  --minimap-bg: rgba(255, 255, 255, 0.02);
+  --minimap-slider: rgba(255, 255, 255, 0.08);
+  --minimap-slider-hover: rgba(255, 255, 255, 0.15);
+  --minimap-text: rgba(242, 242, 244, 0.5);
+  --minimap-dim: rgba(242, 242, 244, 0.2);
 }
 
 * {

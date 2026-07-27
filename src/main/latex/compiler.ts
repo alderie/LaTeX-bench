@@ -39,6 +39,13 @@ export class LatexCompiler {
 
       let stdout = ''
       let stderr = ''
+      // A binary that isn't on PATH makes Node emit *both* `error` and
+      // `close`. The `error` handler is the one that knows what went wrong
+      // ("is TeX Live installed?"); the `close` that follows it finds no log
+      // file, parses nothing out of an empty string, and used to overwrite
+      // that answer with a bare failure carrying no errors at all. First
+      // result wins.
+      let settled = false
       const send = (line: string) => {
         try {
           this.mainWindow.webContents.send('latex:build-progress', { paperId, line })
@@ -59,6 +66,8 @@ export class LatexCompiler {
       })
 
       child.on('error', (err) => {
+        if (settled) return
+        settled = true
         this.running.delete(paperId)
         const result: BuildResult = {
           success: false,
@@ -82,6 +91,8 @@ export class LatexCompiler {
       })
 
       child.on('close', async (code) => {
+        if (settled) return
+        settled = true
         this.running.delete(paperId)
 
         // latexmk / pdflatex usually leave a .log file even on error — prefer
@@ -111,6 +122,19 @@ export class LatexCompiler {
               severity: 'error'
             })
           }
+        }
+
+        // A failure the log parser found nothing in is the worst possible
+        // report: the panel says the build failed and then has nothing to
+        // show for it. Say what we do know — the exit code, and where the
+        // full output is — rather than an empty list.
+        if (!success && errors.length === 0) {
+          errors.push({
+            message:
+              `${cmd} exited with code ${code ?? 'unknown'} and produced no PDF. ` +
+              'Nothing in the log matched a known error pattern — see the Log tab for the full output.',
+            severity: 'error'
+          })
         }
 
         const result: BuildResult = {

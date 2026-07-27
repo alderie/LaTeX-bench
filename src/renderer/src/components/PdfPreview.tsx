@@ -48,22 +48,32 @@ interface PdfDocument {
   destroy(): Promise<void>
 }
 
-let pdfjsModule: Promise<typeof import('pdfjs-dist')> | null = null
+type Pdfjs = typeof import('pdfjs-dist/legacy/build/pdf.mjs')
+
+let pdfjsModule: Promise<Pdfjs> | null = null
 
 /**
  * Load pdf.js once, and point it at its worker.
+ *
+ * The *legacy* build, deliberately. pdf.js's default build targets the
+ * newest browsers and calls `Map.prototype.getOrInsertComputed`, which the
+ * Chromium in Electron 39 does not have — so the modern build parses the
+ * document, reports the right page count, and then throws inside every
+ * `render()` call, leaving a correctly-sized blank canvas and no error
+ * anywhere the user can see. The legacy bundle is the same library
+ * transpiled for engines that lack those methods.
  *
  * The worker has to be a real URL Vite has emitted, not a bare specifier —
  * pdf.js fetches it at runtime, so a module path that only the bundler
  * understands resolves to a 404 and every render silently falls back to the
  * main thread.
  */
-function loadPdfjs(): Promise<typeof import('pdfjs-dist')> {
+function loadPdfjs(): Promise<Pdfjs> {
   if (!pdfjsModule) {
     pdfjsModule = (async () => {
       const [pdfjs, worker] = await Promise.all([
-        import('pdfjs-dist'),
-        import('pdfjs-dist/build/pdf.worker.min.mjs?url')
+        import('pdfjs-dist/legacy/build/pdf.mjs'),
+        import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url')
       ])
       pdfjs.GlobalWorkerOptions.workerSrc = worker.default
       return pdfjs
@@ -188,9 +198,17 @@ export function PdfPreview(): React.JSX.Element {
         tasks.push(task)
         try {
           await task.promise
-        } catch {
+        } catch (err) {
           // A cancelled render is the normal outcome of a rebuild landing
-          // mid-paint, not a failure worth surfacing.
+          // mid-paint. Anything else means the page did not draw, and a
+          // silent catch here is what let a library incompatibility present
+          // itself as a correctly-sized blank sheet with the right page
+          // count — so everything except a cancellation is reported.
+          if ((err as Error).name === 'RenderingCancelledException') return
+          if (cancelled) return
+          setStatus('error')
+          setError(`Page ${n} failed to render: ${(err as Error).message}`)
+          return
         }
       }
     })()

@@ -1063,6 +1063,17 @@
   background: transparent;
   font-family: var(--font-sans);
   font-size: 11px;
+  /* One line box for everything on the bar.
+     `align-items: center` centres each control's *box*, which is not the same
+     as putting their text on one line: a 10px note in Inter and an 11px name
+     in Geist Mono centred in boxes of their own natural height sit on three
+     different baselines, and a row of captions a pixel apart reads as sloppy
+     even when nobody can say why. Fixing the line box makes every text run in
+     here — whatever its size or family — centre on the same one. */
+  line-height: 16px;
+  /* Including inside a header field, whose own default line box belongs to
+     the theorem header it was generalised for. */
+  --head-field-line: 16px;
   color: var(--text-secondary);
   overflow: visible;
 }
@@ -1126,7 +1137,7 @@
 }
 /* The icon, the caption and the field all carry different font metrics, so
    centring the flex boxes alone leaves the text visibly stepped. Give each one
-   the same line box and let align-items do the rest. */
+   the bar's line box and let align-items do the rest. */
 .block-editor__label > svg {
   display: block;
   flex: none;
@@ -1201,7 +1212,7 @@
   font-family: var(--font-sans);
   font-size: 0.9em;
   font-weight: 600;
-  line-height: 1.45em;
+  line-height: var(--head-field-line, 1.45em);
   letter-spacing: 0.05em;
   text-transform: uppercase;
   white-space: nowrap;
@@ -1232,7 +1243,11 @@
   font-family: var(--font-sans);
   font-size: 1.05em;
   font-weight: 500;
-  line-height: 1.4em;
+  /* One line box for the caption, the value and the invisible copy that
+     measures it, so a field's text doesn't move as it fills. What the line
+     box *is* belongs to the header the field sits in — see
+     `.block-editor__bar`, which sets the same one for everything on it. */
+  line-height: var(--head-field-line, 1.45em);
   letter-spacing: normal;
   text-transform: none;
 }
@@ -1250,6 +1265,14 @@
   overflow: hidden;
 }
 .head-field__input {
+  /* The invisible copy of the value is what sizes the grid's one column, and
+     without this the input brings its own opinion: an `<input>` with no width
+     is twenty characters wide whatever it holds, so `@{}lrrr@{}` reserved
+     three times its own width and left a hole between the field and whatever
+     came after it on the bar. Zero width is what keeps the input out of the
+     column's measurement; the minimum is what then fills it. */
+  width: 0;
+  min-width: 100%;
   margin: 0;
   border: 0;
   outline: none;

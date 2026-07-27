@@ -9,6 +9,17 @@ import type { BrowserWindow } from 'electron'
 import type { TexInstallProgress, TexInstallState } from '../../shared/types'
 import { managedBinDir, managedTexDir, managedTexSize, managedTexVersion } from './managed-tex'
 import { phaseProgress, progressFromLine } from './tex-progress'
+import {
+  bundledPerlPath,
+  extractSpec,
+  installTlSpec,
+  installerArchiveName,
+  powershellUnzipSpec,
+  spawnSpec,
+  texPath,
+  tlmgrName,
+  type SpawnSpec
+} from './tex-commands'
 
 // Installing TeX, without asking anyone to install TeX.
 //
@@ -87,16 +98,20 @@ const EXTRA_PACKAGES = [
  * tries to write formats into a system directory that doesn't exist and
  * fails the install.
  */
-function installProfile(texDir: string): string {
+export function installProfile(texDir: string): string {
+  // Forward slashes throughout: kpathsea reads them on every platform, and
+  // a backslash in a profile or a texmf.cnf is an escape character — so a
+  // literal `C:\texlive\texmf-var` would carry a tab into the path.
+  const tree = (...parts: string[]): string => texPath(join(texDir, ...parts))
   return [
     'selected_scheme scheme-basic',
-    `TEXDIR ${texDir}`,
-    `TEXMFLOCAL ${join(texDir, 'texmf-local')}`,
-    `TEXMFSYSVAR ${join(texDir, 'texmf-var')}`,
-    `TEXMFSYSCONFIG ${join(texDir, 'texmf-config')}`,
-    `TEXMFVAR ${join(texDir, 'texmf-var')}`,
-    `TEXMFCONFIG ${join(texDir, 'texmf-config')}`,
-    `TEXMFHOME ${join(texDir, 'texmf-home')}`,
+    `TEXDIR ${texPath(texDir)}`,
+    `TEXMFLOCAL ${tree('texmf-local')}`,
+    `TEXMFSYSVAR ${tree('texmf-var')}`,
+    `TEXMFSYSCONFIG ${tree('texmf-config')}`,
+    `TEXMFVAR ${tree('texmf-var')}`,
+    `TEXMFCONFIG ${tree('texmf-config')}`,
+    `TEXMFHOME ${tree('texmf-home')}`,
     // Don't touch the user's shell profile, don't pin the repository we
     // happened to install from, don't keep package backups we'd never use.
     'instopt_adjustpath 0',
@@ -212,7 +227,7 @@ export class TexInstaller {
 
   /** Download the net installer, trying each mirror in turn. */
   private async fetchInstaller(work: string): Promise<string> {
-    const archive = process.platform === 'win32' ? 'install-tl.zip' : 'install-tl-unx.tar.gz'
+    const archive = installerArchiveName(process.platform)
     const target = join(work, archive)
     const failures: string[] = []
 
@@ -252,14 +267,19 @@ export class TexInstaller {
 
   private async extractInstaller(work: string): Promise<string> {
     this.emit(phaseProgress('extract', 'Unpacking the installer…'))
-    const archive =
-      process.platform === 'win32'
-        ? join(work, 'install-tl.zip')
-        : join(work, 'install-tl-unx.tar.gz')
+    const name = installerArchiveName(process.platform)
+
     // `tar` reads both formats and ships with macOS, every Linux, and
-    // Windows 10 build 17063 onward (as bsdtar), so no archive library and
-    // no extra dependency.
-    await this.run('tar', ['-xf', archive, '-C', work], work, () => undefined)
+    // Windows 10 build 17063 onward. Note the archive is named rather than
+    // pathed and tar runs inside the work directory — see `extractSpec`.
+    try {
+      await this.runSpec(extractSpec(name, process.platform), work, () => undefined)
+    } catch (err) {
+      if (process.platform !== 'win32') throw err
+      // Windows without tar. PowerShell has been able to unpack a zip
+      // since 5.0, which is every supported Windows.
+      await this.runSpec(powershellUnzipSpec(join(work, name), work), work, () => undefined)
+    }
 
     const entries = await readdir(work, { withFileTypes: true })
     const dir = entries.find((e) => e.isDirectory() && e.name.startsWith('install-tl-'))
@@ -277,15 +297,17 @@ export class TexInstaller {
     const profile = join(work, 'tex.profile')
     await writeFile(profile, installProfile(texDir), 'utf-8')
 
-    const args = ['-profile', profile, '-no-interaction', '-repository', repository]
-    // The Windows installer bundles its own Perl; every other platform has
-    // one, and TeX Live requires it.
-    const [command, commandArgs] =
-      process.platform === 'win32'
-        ? [join(installerDir, 'install-tl-windows.bat'), args]
-        : ['perl', [join(installerDir, 'install-tl'), ...args]]
+    // The Windows archive carries its own Perl; every other platform has one.
+    const perl = bundledPerlPath(installerDir)
+    const spec = installTlSpec(
+      installerDir,
+      profile,
+      repository,
+      process.platform,
+      existsSync(perl) ? perl : null
+    )
 
-    await this.run(command, commandArgs, installerDir, (line) => {
+    await this.runSpec(spec, installerDir, (line) => {
       const update = progressFromLine('install', line)
       if (update) this.emit(update)
     })
@@ -301,18 +323,25 @@ export class TexInstaller {
   }
 
   private async installPackages(texDir: string, repository: string): Promise<void> {
-    const tlmgr = join(
-      managedBinDir(this.rootDir) ?? '',
-      process.platform === 'win32' ? 'tlmgr.bat' : 'tlmgr'
-    )
+    // On Windows this is `tlmgr.bat`, which Node will not spawn directly —
+    // `spawnSpec` routes it through the command interpreter.
+    const tlmgr = join(managedBinDir(this.rootDir) ?? '', tlmgrName(process.platform))
     if (!existsSync(tlmgr)) throw new Error('tlmgr is missing from the new installation.')
 
     this.emit(phaseProgress('packages', 'Adding the packages a paper needs…'))
-    await this.run(tlmgr, ['option', 'repository', repository], texDir, () => undefined)
-    await this.run(tlmgr, ['install', ...EXTRA_PACKAGES], texDir, (line) => {
-      const update = progressFromLine('packages', line)
-      if (update) this.emit(update)
-    })
+    await this.runSpec(
+      spawnSpec(tlmgr, ['option', 'repository', repository], process.platform),
+      texDir,
+      () => undefined
+    )
+    await this.runSpec(
+      spawnSpec(tlmgr, ['install', ...EXTRA_PACKAGES], process.platform),
+      texDir,
+      (line) => {
+        const update = progressFromLine('packages', line)
+        if (update) this.emit(update)
+      }
+    )
   }
 
   /**
@@ -324,15 +353,16 @@ export class TexInstaller {
    * exits the same way and very much is one, so the two are told apart by
    * what was printed rather than by the code alone.
    */
-  private run(
-    command: string,
-    args: string[],
-    cwd: string,
-    onLine: (line: string) => void
-  ): Promise<void> {
+  private runSpec(spec: SpawnSpec, cwd: string, onLine: (line: string) => void): Promise<void> {
+    const { command, args } = spec
     return new Promise((resolve, reject) => {
       if (this.cancelled) return reject(new Error('cancelled'))
-      const child = spawn(command, args, { cwd, windowsHide: true, shell: false })
+      const child = spawn(command, args, {
+        cwd,
+        windowsHide: true,
+        shell: false,
+        windowsVerbatimArguments: spec.windowsVerbatimArguments
+      })
       this.running = child
 
       let tail = ''
@@ -350,7 +380,7 @@ export class TexInstaller {
           new Error(
             command === 'perl'
               ? `Perl is required to install TeX Live and could not be started: ${err.message}`
-              : `Could not run ${command}: ${err.message}`
+              : `Could not run ${basename(command)}: ${err.message}`
           )
         )
       })

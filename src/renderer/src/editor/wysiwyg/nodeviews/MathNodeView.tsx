@@ -4,7 +4,7 @@ import type { Node as PMNode } from 'prosemirror-model'
 import type { EditorView, NodeView, NodeViewConstructor } from 'prosemirror-view'
 import { getEquationNumbersForPos, subscribe as subscribeRegistry } from '../labelRegistry'
 import { getMathMacros, injectEquationTags, stripMathWrappers } from '../math-macros'
-import { FormulaEditor } from './formula-editor'
+import { FormulaEditor } from '../editors/formula-editor'
 
 // Re-exported for the editor, which sets the table when a paper loads.
 export { setMathMacros, getMathMacros } from '../math-macros'

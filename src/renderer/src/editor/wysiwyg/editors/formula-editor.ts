@@ -28,7 +28,9 @@ import {
 import { getMathMacros } from '../math-macros'
 import { createIcon } from '../icons'
 import { createDropdown, type Dropdown } from '../dropdown'
-import { MatrixGrid } from './matrix-grid'
+import { MatrixGrid } from '../nodeviews/matrix-grid'
+import { CodeField } from './code-field'
+import { EditorPanel, panelButton, panelName } from './editor-panel'
 
 // The formula editing surface.
 //
@@ -50,9 +52,9 @@ import { MatrixGrid } from './matrix-grid'
 //
 // and `\` completes, listing the paper's own macros first.
 //
-// All of it is plain DOM. This lives inside a ProseMirror node view, and
-// putting a React root between a keystroke and its repaint is what made the
-// old preview stutter on a long `align`.
+// The chrome around all that — the bar, the hint, the delete button, the
+// preview strip — is `EditorPanel`, shared with the table and preamble
+// editors so the three read as one editor with three subjects.
 
 export interface FormulaEditorOptions {
   latex: string
@@ -69,11 +71,11 @@ export interface FormulaEditorOptions {
   onDelete?: () => void
 }
 
-const COMMIT_HINT = '⌘⏎ done · esc revert'
-
 export class FormulaEditor {
   readonly dom: HTMLElement
+  private panel: EditorPanel
   private shell: MathShell
+  private code: CodeField
   private field: HTMLInputElement | HTMLTextAreaElement
   private preview: HTMLElement | null = null
   private completions: CompletionPopup | null = null
@@ -106,32 +108,36 @@ export class FormulaEditor {
     this.initialChoice = shellChoice(this.shell)
     this.initialLabel = this.shell.label
 
-    this.dom = document.createElement('div')
-    this.dom.className = options.displayMode ? 'formula-editor' : 'formula-editor--inline'
+    this.panel = new EditorPanel({
+      variant: 'formula',
+      inline: !options.displayMode,
+      onDelete: options.onDelete && (() => this.deleteSelf()),
+      deleteTitle: 'Delete this equation'
+    })
+    this.dom = this.panel.dom
 
-    this.field = options.displayMode ? this.buildTextarea() : this.buildInput()
+    this.code = options.displayMode ? this.buildTextarea() : this.buildInput()
+    this.field = this.code.input
     // `env !== ''` is "the body is a matrix", as opposed to "the formula's own
     // environment happens to be a grid" — see `preferGrid`.
     this.preferGrid = (gridRegion(this.shell, this.field.value)?.env ?? '') !== ''
 
     if (options.displayMode) {
-      this.dom.appendChild(this.buildBar())
+      this.buildBar()
       this.gridHost = document.createElement('div')
-      this.gridHost.className = 'formula-editor__grid-host'
-      this.dom.appendChild(this.gridHost)
-      this.dom.appendChild(this.field)
-      this.preview = document.createElement('div')
-      this.preview.className = 'math-preview'
-      this.dom.appendChild(this.preview)
+      this.gridHost.className = 'block-editor__grid-host'
+      this.panel.body.appendChild(this.gridHost)
+      this.panel.body.appendChild(this.code.dom)
+      this.preview = this.panel.previewHost()
+      this.preview.classList.add('math-preview')
       this.paint()
       this.updateGridControls()
       this.updateSurface()
     } else {
-      this.dom.appendChild(this.field)
+      this.panel.body.appendChild(this.code.dom)
     }
 
     this.completions = new CompletionPopup((completion) => this.accept(completion))
-    this.field.addEventListener('input', () => this.onInput())
     this.field.addEventListener('keydown', (event) => this.onKeyDown(event as KeyboardEvent))
     // On the subtree rather than the field: the grid's cells, the label and
     // the environment list are all part of "still editing this formula", and
@@ -157,7 +163,7 @@ export class FormulaEditor {
       } catch {
         /* a detached field; nothing to place */
       }
-      if (el instanceof HTMLTextAreaElement) autosize(el)
+      this.code.refresh()
     })
   }
 
@@ -177,10 +183,7 @@ export class FormulaEditor {
 
   // ── Chrome ───────────────────────────────────────────────────────────
 
-  private buildBar(): HTMLElement {
-    const bar = document.createElement('div')
-    bar.className = 'formula-editor__bar'
-
+  private buildBar(): void {
     const choice = shellChoice(this.shell)
     if (choice !== null) {
       // A custom list rather than a native `<select>`: the OS popup can't
@@ -191,72 +194,39 @@ export class FormulaEditor {
       this.envDropdown = createDropdown({
         options: ENV_CHOICES,
         value: choice,
-        className: 'formula-editor__env',
+        className: 'block-editor__env',
         title: 'Environment',
         onChange: (value) => this.switchEnv(value)
       })
-      bar.appendChild(this.envDropdown.dom)
+      this.panel.addControl(this.envDropdown.dom)
     } else if (this.shell.kind === 'env') {
-      const name = document.createElement('span')
-      name.className = 'formula-editor__env-name'
-      name.textContent = this.shell.env
-      bar.appendChild(name)
+      this.panel.addControl(panelName(this.shell.env))
     }
 
     if (this.shell.label !== null || this.canCarryLabel()) {
-      bar.appendChild(this.buildLabelField())
+      this.panel.addControl(this.buildLabelField())
     }
 
     this.gridControls = document.createElement('span')
-    this.gridControls.className = 'formula-editor__grid'
+    this.gridControls.className = 'block-editor__grid'
     this.gridControls.appendChild(
-      iconButton('rows', 'Add row', () => this.applyToBody(addRow))
+      panelButton('rows', 'Add row', () => this.applyToBody(addRow), { plus: true })
     )
     this.gridControls.appendChild(
-      iconButton('columns', 'Add column', () => this.applyToBody(addColumn))
+      panelButton('columns', 'Add column', () => this.applyToBody(addColumn), { plus: true })
     )
-    bar.appendChild(this.gridControls)
+    this.panel.addControl(this.gridControls)
 
     // Only appears when there is a grid to switch away from — the cells view
     // is the default for a matrix, and this is the way back to the source for
     // anything the table can't express (a `\multicolumn`, a stray `\hline`).
-    this.sourceToggle = iconButton('code', 'Edit as LaTeX', () => {
+    this.sourceToggle = panelButton('code', 'Edit as LaTeX', () => {
       this.preferGrid = !this.preferGrid
       this.updateSurface()
       this.focus()
     })
     this.sourceToggle.hidden = true
-    bar.appendChild(this.sourceToggle)
-
-    const spacer = document.createElement('span')
-    spacer.className = 'formula-editor__spacer'
-    bar.appendChild(spacer)
-
-    const hint = document.createElement('span')
-    hint.className = 'formula-editor__hint'
-    hint.textContent = COMMIT_HINT
-    bar.appendChild(hint)
-
-    const onDelete = this.options.onDelete
-    if (onDelete) {
-      const remove = document.createElement('button')
-      remove.type = 'button'
-      remove.className = 'formula-editor__button formula-editor__button--danger'
-      remove.title = 'Delete this equation'
-      remove.setAttribute('aria-label', 'Delete this equation')
-      remove.appendChild(createIcon('trash', 14))
-      // As everywhere else in this bar: mousedown would blur the field and
-      // commit the edit before the click ran.
-      remove.addEventListener('mousedown', (event) => event.preventDefault())
-      remove.addEventListener('click', () => {
-        // Nothing left to commit, and the focusout that follows must not try.
-        this.finished = true
-        onDelete()
-      })
-      bar.appendChild(remove)
-    }
-
-    return bar
+    this.panel.addControl(this.sourceToggle)
   }
 
   /** Numbered environments are the ones worth referring to by label. */
@@ -272,11 +242,11 @@ export class FormulaEditor {
    */
   private buildLabelField(): HTMLElement {
     const wrap = document.createElement('label')
-    wrap.className = 'formula-editor__label'
+    wrap.className = 'block-editor__label'
     wrap.appendChild(createIcon('tag', 12))
 
     const caption = document.createElement('span')
-    caption.className = 'formula-editor__label-caption'
+    caption.className = 'block-editor__label-caption'
     caption.textContent = 'label'
     wrap.appendChild(caption)
 
@@ -285,10 +255,10 @@ export class FormulaEditor {
     input.value = this.shell.label ?? ''
     input.placeholder = 'eq:name'
     input.spellcheck = false
-    input.className = 'formula-editor__label-input'
+    input.className = 'block-editor__label-input'
     input.title = 'Reference name for \\ref and \\cref'
     const reflect = (): void => {
-      wrap.classList.toggle('formula-editor__label--set', input.value.trim() !== '')
+      wrap.classList.toggle('block-editor__label--set', input.value.trim() !== '')
     }
     reflect()
     input.addEventListener('input', () => {
@@ -308,26 +278,23 @@ export class FormulaEditor {
     return wrap
   }
 
-  private buildTextarea(): HTMLTextAreaElement {
-    const el = document.createElement('textarea')
-    el.className = 'math-block__editor'
-    el.value = this.initialBody
-    el.spellcheck = false
-    el.rows = Math.max(2, this.initialBody.split('\n').length)
-    el.addEventListener('input', () => autosize(el))
-    requestAnimationFrame(() => autosize(el))
-    return el
+  private buildTextarea(): CodeField {
+    return new CodeField({
+      value: this.initialBody,
+      multiline: true,
+      className: 'code-field--math',
+      onInput: () => this.onInput()
+    })
   }
 
-  private buildInput(): HTMLInputElement {
-    const el = document.createElement('input')
-    el.type = 'text'
-    el.className = 'math-inline__editor'
-    el.value = this.original
-    el.placeholder = 'x^2'
-    el.spellcheck = false
-    el.autocomplete = 'off'
-    return el
+  private buildInput(): CodeField {
+    return new CodeField({
+      value: this.original,
+      multiline: false,
+      className: 'code-field--math-inline',
+      placeholder: 'x^2',
+      onInput: () => this.onInput()
+    })
   }
 
   // ── Editing ──────────────────────────────────────────────────────────
@@ -335,8 +302,7 @@ export class FormulaEditor {
   private switchEnv(choice: string): void {
     const result = switchEnvironment(this.shell, choice, this.field.value)
     this.shell = result.shell
-    this.field.value = result.body
-    if (this.field instanceof HTMLTextAreaElement) autosize(this.field)
+    this.code.value = result.body
     this.schedulePaint()
     this.updateGridControls()
     // `align` is a grid and `equation` isn't, so the surface itself changes.
@@ -361,14 +327,14 @@ export class FormulaEditor {
       this.sourceToggle.hidden = region === null
       this.sourceToggle.title = showGrid ? 'Edit as LaTeX' : 'Edit as a grid'
       this.sourceToggle.setAttribute('aria-label', this.sourceToggle.title)
-      this.sourceToggle.classList.toggle('formula-editor__button--on', !showGrid)
+      this.sourceToggle.classList.toggle('block-editor__button--on', !showGrid)
     }
     // The row/column buttons are the source view's way to grow a grid; the
     // cells view grows by typing into the dashed edge, so they'd be noise.
-    this.gridControls?.classList.toggle('formula-editor__grid--hidden', showGrid)
+    this.gridControls?.classList.toggle('block-editor__grid--hidden', showGrid)
 
     host.hidden = !showGrid
-    this.field.classList.toggle('math-block__editor--hidden', showGrid)
+    this.code.setHidden(showGrid)
     if (!showGrid) {
       this.grid?.destroy()
       this.grid = null
@@ -399,8 +365,7 @@ export class FormulaEditor {
             .split('\n')
             .map((line) => `  ${line}`)
             .join('\n')}\n`
-    this.field.value = value.slice(0, region.from) + text + value.slice(region.to)
-    if (this.field instanceof HTMLTextAreaElement) autosize(this.field)
+    this.code.value = value.slice(0, region.from) + text + value.slice(region.to)
     this.schedulePaint()
   }
 
@@ -426,12 +391,11 @@ export class FormulaEditor {
   private applyToBody(transform: (body: string) => string): void {
     const before = cellSpans(this.field.value).length
     const next = transform(this.field.value)
-    this.field.value = next
+    this.code.value = next
     const spans = cellSpans(next)
     const target = spans[Math.min(before, spans.length - 1)]
     this.field.focus()
     if (target) this.field.setSelectionRange(target.to, target.to)
-    if (this.field instanceof HTMLTextAreaElement) autosize(this.field)
     this.schedulePaint()
   }
 
@@ -445,7 +409,7 @@ export class FormulaEditor {
   private updateGridControls(): void {
     if (!this.gridControls) return
     this.gridControls.classList.toggle(
-      'formula-editor__grid--off',
+      'block-editor__grid--off',
       !isGridBody(this.shell, this.field.value)
     )
   }
@@ -488,11 +452,10 @@ export class FormulaEditor {
     const query = this.currentQuery()
     if (!query) return
     const result = applyCompletion(this.field.value, query.from, caret, completion)
-    this.field.value = result.value
+    this.code.value = result.value
     this.field.setSelectionRange(result.caret, result.caret)
     this.completions?.hide()
     this.field.focus()
-    if (this.field instanceof HTMLTextAreaElement) autosize(this.field)
     this.schedulePaint()
   }
 
@@ -575,6 +538,13 @@ export class FormulaEditor {
     }
     if (direction === -1) return
     this.applyToBody(addColumn)
+  }
+
+  /** Remove the equation, editor and all. */
+  private deleteSelf(): void {
+    // Nothing left to commit, and the focusout that follows must not try.
+    this.finished = true
+    this.options.onDelete?.()
   }
 
   private schedulePaint(): void {
@@ -788,29 +758,6 @@ class CompletionPopup {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
-
-function iconButton(
-  icon: Parameters<typeof createIcon>[0],
-  title: string,
-  onClick: () => void
-): HTMLButtonElement {
-  const button = document.createElement('button')
-  button.type = 'button'
-  button.className = 'formula-editor__button'
-  button.title = title
-  button.setAttribute('aria-label', title)
-  button.appendChild(createIcon(icon, 14))
-  button.appendChild(createIcon('plus', 10))
-  // mousedown would blur the field and commit before the click ran.
-  button.addEventListener('mousedown', (event) => event.preventDefault())
-  button.addEventListener('click', onClick)
-  return button
-}
-
-function autosize(el: HTMLTextAreaElement): void {
-  el.style.height = 'auto'
-  el.style.height = `${el.scrollHeight}px`
-}
 
 /** Macro names the current paper's preamble declared, for completion. */
 function userMacroNames(): string[] {

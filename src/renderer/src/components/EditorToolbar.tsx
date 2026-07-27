@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import { undo, redo } from 'prosemirror-history'
 import { useUiStore } from '../stores/uiStore'
+import { BlockKindMenu } from './BlockKindMenu'
 import {
   getActiveEditorView,
   insertDisplayMath,
@@ -87,7 +88,7 @@ export function EditorToolbar(): React.JSX.Element | null {
   const zoom = useUiStore((s) => s.zoom)
   const stepZoom = useUiStore((s) => s.stepZoom)
   const resetZoom = useUiStore((s) => s.resetZoom)
-  const { marks, ready } = useEditorSelection()
+  const { marks, block, ready } = useEditorSelection()
 
   // The formatting half only makes sense against the rich editor; source
   // mode has CodeMirror's own keybindings.
@@ -104,6 +105,14 @@ export function EditorToolbar(): React.JSX.Element | null {
     <div className="editor-toolbar" role="toolbar" aria-label="Formatting">
       {rich && (
         <>
+          {/* First on the bar, and the widest thing on it: which of
+              \section / \subsection / body text this block is, is the one
+              formatting question whose answer changes the document's
+              structure rather than its appearance. */}
+          <BlockKindMenu block={block} disabled={!ready} />
+
+          <div className="editor-toolbar__divider" />
+
           <div className="editor-toolbar__group">
             {MARK_BUTTONS.map(({ name, title, Icon }) => (
               <ToolbarButton

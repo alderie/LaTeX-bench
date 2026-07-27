@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { FormulaEditor } from '@renderer/editor/wysiwyg/nodeviews/formula-editor'
+import { FormulaEditor } from '@renderer/editor/wysiwyg/editors/formula-editor'
 
 // The formula editor's job is to show the author their maths and nothing
 // else, then put the wrapper back exactly as it was. These tests drive it
@@ -67,7 +67,7 @@ describe('formula editor', () => {
   it('puts the label in a field rather than in the text', () => {
     const { editor, field } = open()
     expect(field.value).not.toContain('\\label')
-    const label = editor.dom.querySelector('.formula-editor__label-input') as HTMLInputElement
+    const label = editor.dom.querySelector('.block-editor__label-input') as HTMLInputElement
     expect(label.value).toBe('eq:bregman')
   })
 
@@ -99,7 +99,7 @@ describe('formula editor', () => {
 
   it('renames the label from the field', () => {
     const { editor, field, commit } = open()
-    const label = editor.dom.querySelector('.formula-editor__label-input') as HTMLInputElement
+    const label = editor.dom.querySelector('.block-editor__label-input') as HTMLInputElement
     label.value = 'eq:divergence'
     label.dispatchEvent(new window.Event('input'))
     press(field, 'Enter', { metaKey: true })
@@ -146,7 +146,7 @@ describe('formula editor', () => {
 
     it('adds a row from the toolbar', () => {
       const { editor, field } = open(MATRIX)
-      const [addRow] = editor.dom.querySelectorAll('.formula-editor__button')
+      const [addRow] = editor.dom.querySelectorAll('.block-editor__button')
       ;(addRow as HTMLButtonElement).click()
       expect(field.value.split('\\\\').length).toBe(3)
     })
@@ -155,22 +155,22 @@ describe('formula editor', () => {
       // Dimmed rather than hidden: removing them would make the bar jump
       // every time a matrix is typed or deleted.
       const { editor } = open()
-      const controls = editor.dom.querySelector('.formula-editor__grid')
-      expect(controls?.classList.contains('formula-editor__grid--off')).toBe(true)
+      const controls = editor.dom.querySelector('.block-editor__grid')
+      expect(controls?.classList.contains('block-editor__grid--off')).toBe(true)
     })
 
     it('enables the grid controls for a formula that has one', () => {
       const { editor } = open(MATRIX)
-      const controls = editor.dom.querySelector('.formula-editor__grid')
-      expect(controls?.classList.contains('formula-editor__grid--off')).toBe(false)
+      const controls = editor.dom.querySelector('.block-editor__grid')
+      expect(controls?.classList.contains('block-editor__grid--off')).toBe(false)
     })
 
     it('enables them as soon as a matrix is typed into a plain equation', () => {
       const { editor, field } = open()
       field.value = '\\begin{pmatrix} a & b \\end{pmatrix}'
       field.dispatchEvent(new window.Event('input'))
-      const controls = editor.dom.querySelector('.formula-editor__grid')
-      expect(controls?.classList.contains('formula-editor__grid--off')).toBe(false)
+      const controls = editor.dom.querySelector('.block-editor__grid')
+      expect(controls?.classList.contains('block-editor__grid--off')).toBe(false)
     })
   })
 

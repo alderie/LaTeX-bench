@@ -248,6 +248,31 @@ function toCompletion(entry: Entry, fromPaper: boolean): Completion {
 export const COMPLETION_LIMIT = 9
 
 /**
+ * Every macro in the catalogue, with what it inserts and what it is for.
+ *
+ * The formula editor ranks these itself (see `completionsFor`); the source
+ * view hands them to CodeMirror, which does its own matching. Both want the
+ * same list, and duplicating it is how the two views end up disagreeing about
+ * whether this document can write `\coloneqq`.
+ */
+export function catalogueEntries(): Array<{
+  name: string
+  insert: string
+  caret: number
+  detail: string
+}> {
+  return CATALOGUE.map((entry) => {
+    const completion = toCompletion(entry, false)
+    return {
+      name: completion.name,
+      insert: completion.insert,
+      caret: completion.caret,
+      detail: completion.detail
+    }
+  })
+}
+
+/**
  * Rank completions for a typed `\word`.
  *
  * A bare `\` lists the paper's own macros first — at that point the author

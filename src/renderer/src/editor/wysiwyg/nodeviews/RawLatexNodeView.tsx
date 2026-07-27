@@ -3,10 +3,24 @@ import type { EditorView, NodeView, NodeViewConstructor } from 'prosemirror-view
 import { isAlgorithmSource, renderAlgorithm } from '../renderers/algorithm'
 import { isTabularSource, renderTabular } from '../renderers/tabular'
 import { isStructuralSource, renderStructural } from '../renderers/structural'
+import { SourceBlockEditor } from '../editors/source-block-editor'
+import { TabularEditor } from '../editors/tabular-editor'
+
+// A block the parser kept as source. Three of those turn out to be things we
+// can draw — a table, an algorithm, a `\appendix` rule — and the rest are
+// shown as the LaTeX they are.
+//
+// Editing goes through the same panel the formula editor uses, so a table
+// clicked open looks like an equation clicked open: a bar naming what this is
+// and what can be changed about it, a highlighted source area, and a live
+// rendering underneath. A table gets the table editor, which adds the
+// controls only a table has (its column spec, its shape); everything else
+// gets the plain source editor.
 
 class RawLatexView implements NodeView {
   dom: HTMLElement
   private editing = false
+  private editor: TabularEditor | SourceBlockEditor | null = null
 
   constructor(
     private node: PMNode,
@@ -31,7 +45,7 @@ class RawLatexView implements NodeView {
 
   private render(): void {
     this.dom.replaceChildren()
-    this.dom.classList.remove('raw-latex-block--rich')
+    this.dom.classList.remove('raw-latex-block--rich', 'raw-latex-block--editing')
     const source = (this.node.attrs.source as string) || ''
     if (!source) {
       this.dom.textContent = '% (empty raw block)'
@@ -61,73 +75,65 @@ class RawLatexView implements NodeView {
   }
 
   private openEditor(): void {
-    const measuredHeight = this.dom.getBoundingClientRect().height
+    const source = (this.node.attrs.source as string) || ''
+    // Structural markers have nothing to edit — see `render`.
+    if (isStructuralSource(source)) return
+
     this.editing = true
     this.dom.replaceChildren()
     this.dom.classList.remove('raw-latex-block--rich')
     this.dom.classList.add('raw-latex-block--editing')
-    const ta = document.createElement('textarea')
-    ta.className = 'raw-latex-block__editor'
-    ta.value = this.node.attrs.source as string
-    ta.style.height = `${measuredHeight}px`
-    this.dom.appendChild(ta)
 
-    const autoSize = (): void => {
-      ta.style.height = '0px'
-      ta.style.height = `${ta.scrollHeight}px`
+    const handlers = {
+      onCommit: (next: string) => this.closeEditor(next),
+      onCancel: () => this.closeEditor(null),
+      onDelete: () => this.deleteSelf()
     }
-    // Two rAFs: first lets the browser apply CSS, second measures correctly.
-    requestAnimationFrame(() => {
-      autoSize()
-      requestAnimationFrame(() => {
-        autoSize()
-        ta.focus()
-        ta.setSelectionRange(0, 0)
-        ta.scrollTop = 0
-      })
-    })
-    ta.addEventListener('input', autoSize)
-
-    // The textarea is not part of the document ProseMirror manages, so the
-    // keymap that deletes an empty block never sees a key pressed in here.
-    let removed = false
-
-    const commit = (): void => {
-      if (removed) return
-      const next = ta.value
-      this.editing = false
-      this.dom.classList.remove('raw-latex-block--editing')
-      const pos = this.getPos()
-      if (typeof pos === 'number' && next !== this.node.attrs.source) {
-        const tr = this.view.state.tr.setNodeMarkup(pos, undefined, {
-          ...this.node.attrs,
-          source: next
+    this.editor = isTabularSource(source)
+      ? new TabularEditor({ source, ...handlers })
+      : new SourceBlockEditor({
+          source,
+          variant: 'raw',
+          title: environmentName(source) ?? 'LaTeX',
+          deleteTitle: 'Delete this block',
+          ...handlers
         })
-        this.view.dispatch(tr)
-      } else {
-        this.render()
-      }
-    }
+    this.dom.appendChild(this.editor.dom)
+    this.editor.focus()
+  }
 
-    ta.addEventListener('blur', commit)
-    ta.addEventListener('keydown', (e) => {
-      // Backspace with nothing left to delete takes the block itself, the
-      // same way it does in every other empty block.
-      if ((e.key === 'Backspace' || e.key === 'Delete') && ta.value === '') {
-        e.preventDefault()
-        const pos = this.getPos()
-        if (typeof pos !== 'number') return
-        removed = true
-        this.editing = false
-        this.view.dispatch(this.view.state.tr.delete(pos, pos + this.node.nodeSize))
-        this.view.focus()
-        return
-      }
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        ta.blur()
-      }
-    })
+  /** Leave editing mode, writing `source` back when it changed. */
+  private closeEditor(source: string | null): void {
+    this.editing = false
+    this.editor?.destroy()
+    this.editor = null
+    this.dom.classList.remove('raw-latex-block--editing')
+
+    const pos = this.getPos()
+    if (source !== null && typeof pos === 'number' && source !== this.node.attrs.source) {
+      this.view.dispatch(
+        this.view.state.tr.setNodeMarkup(pos, undefined, { ...this.node.attrs, source })
+      )
+      return
+    }
+    this.render()
+  }
+
+  private deleteSelf(): void {
+    this.editing = false
+    this.editor?.destroy()
+    this.editor = null
+    const pos = this.getPos()
+    if (typeof pos !== 'number') return
+    this.view.dispatch(this.view.state.tr.delete(pos, pos + this.node.nodeSize))
+    this.view.focus()
+  }
+
+  // Selecting the node counts as asking to edit it, the same way it does for
+  // a formula — that's what lets an insert drop the caret straight into the
+  // table it just made.
+  selectNode(): void {
+    if (!this.editing) this.openEditor()
   }
 
   stopEvent(): boolean {
@@ -139,8 +145,14 @@ class RawLatexView implements NodeView {
   }
 
   destroy(): void {
-    /* no-op */
+    this.editor?.destroy()
+    this.editor = null
   }
+}
+
+/** `\begin{foo}` → `foo`, for a bar that says what this block is. */
+function environmentName(source: string): string | null {
+  return /^\s*\\begin\{([A-Za-z@]+\*?)\}/.exec(source)?.[1] ?? null
 }
 
 export const rawLatexNodeView: NodeViewConstructor = (node, view, getPos) =>

@@ -74,6 +74,17 @@
   --ref-soft: rgba(15, 118, 110, 0.1);
   --ref-border: rgba(15, 118, 110, 0.28);
 
+  /* Source colours — shared by every surface that shows LaTeX as LaTeX:
+     the CodeMirror source view, and the highlighted fields inside the paper
+     (a formula, a table, the preamble). One palette, so the same macro is
+     the same colour wherever the author meets it. Two hues only: macros
+     take the maths hue, environment names the reference hue, and everything
+     else is the greyscale the rest of the app is drawn in. */
+  --code-macro: #4338ca;
+  --code-env: #0f766e;
+  --code-number: #8a6100;
+  --code-string: #8a6100;
+
   /* Status colors */
   --status-ok: #16a34a;
   --status-warn: #d97706;
@@ -113,6 +124,11 @@
   --ref-color: #5eead4;
   --ref-soft: rgba(94, 234, 212, 0.14);
   --ref-border: rgba(94, 234, 212, 0.3);
+
+  --code-macro: #a5b4fc;
+  --code-env: #5eead4;
+  --code-number: #d7b377;
+  --code-string: #d7b377;
 }
 
 * {

@@ -7,13 +7,17 @@ const TABULAR_ENVS = ['tabular', 'tabular*', 'tabularx', 'longtable', 'array']
 // spec is `{@{}llrr@{}}`, and `\{[^}]*\}` stops at the first `}` inside
 // `@{}` — which is how the whole spec used to end up rendered as a table
 // row reading "llrr@".
-interface TabularSource {
+export interface TabularSource {
   env: string
   colSpec: string
   body: string
+  /** Everything before the body, verbatim: `\begin{tabular}{@{}ll@{}}`. */
+  prefix: string
+  /** Everything after it, verbatim. */
+  suffix: string
 }
 
-function splitTabularSource(source: string): TabularSource | null {
+export function splitTabularSource(source: string): TabularSource | null {
   const text = source.trim()
   const open = /^\\begin\{([A-Za-z]+\*?)\}/.exec(text)
   if (!open || !TABULAR_ENVS.includes(open[1])) return null
@@ -57,7 +61,9 @@ function splitTabularSource(source: string): TabularSource | null {
   return {
     env,
     colSpec: groups.length > 0 ? groups[groups.length - 1] : '',
-    body: text.slice(i, text.length - close.length)
+    body: text.slice(i, text.length - close.length),
+    prefix: text.slice(0, i),
+    suffix: close
   }
 }
 
@@ -153,7 +159,7 @@ function splitCells(rowText: string): string[] {
 
 // Strip a leading rule directive from a row segment. Returns the macro it
 // found (if any) and the remaining text.
-function consumeLeadingRules(s: string): {
+export function consumeLeadingRules(s: string): {
   rule?: 'top' | 'mid' | 'bottom'
   cmids: CmidRule[]
   rest: string

@@ -559,10 +559,47 @@
   min-height: 0;
   overflow: hidden;
   display: flex;
+  flex-direction: column;
 }
-.source-editor > .cm-editor {
+.source-editor__host {
   flex: 1;
   min-height: 0;
+  overflow: hidden;
+  display: flex;
+}
+.source-editor__host > .cm-editor {
+  flex: 1;
+  min-height: 0;
+}
+
+/* A status line, because this view is used on files thousands of lines long
+   and "where am I" is otherwise unanswerable without counting. Quiet enough
+   to ignore: it is reference, not chrome you interact with. */
+.source-editor__status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 4px 12px;
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  color: var(--text-tertiary);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+.source-editor__status-sep {
+  opacity: 0.5;
+}
+.source-editor__spacer {
+  flex: 1;
+}
+.source-editor__status-hint {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  opacity: 0.8;
+  white-space: nowrap;
 }
 
 /* ── WYSIWYG editor ───────────────────────────────────────────────── */
@@ -778,6 +815,91 @@
   cursor: default;
 }
 
+/* ── Block kind ──────────────────────────────────────────────────────
+   Which of \section / \subsection / body text this block is. Wider than the
+   icon buttons beside it because it is the only control on the bar whose
+   current value is worth reading — the rest are switches you look at once. */
+.block-kind {
+  position: relative;
+  display: inline-block;
+}
+.block-kind__button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  min-width: 118px;
+  padding: 0 5px 0 7px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+.block-kind__button:hover:not(:disabled) {
+  background: var(--overlay-hover);
+  color: var(--text-primary);
+}
+.block-kind__button--open {
+  background: var(--bg-secondary);
+  border-color: var(--border-color);
+  color: var(--text-primary);
+}
+.block-kind__button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.block-kind__value {
+  flex: 1;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.block-kind__menu {
+  position: absolute;
+  z-index: 400;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 240px;
+  padding: 5px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+}
+.block-kind__option {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 8px;
+  border-radius: 5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.block-kind__option:hover {
+  background: var(--overlay-hover);
+  color: var(--text-primary);
+}
+.block-kind__option--selected {
+  color: var(--text-primary);
+}
+.block-kind__label {
+  flex: 1;
+}
+/* The macro this produces. It is the point of the row — the author is going
+   to meet this name again in the source and in the compile log. */
+.block-kind__macro {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
 /* The zoom percentage doubles as the reset button. */
 .editor-toolbar__zoom {
   min-width: 46px;
@@ -907,11 +1029,12 @@
   opacity: 1;
 }
 
-/* ── Formula editor ──────────────────────────────────────────────────
-   Opened in place of a rendered display. The bar above the text area
-   holds the parts of a formula that aren't maths — which environment it
-   is, what it's labelled, how big the grid is — so the text area holds
-   only the maths.
+/* ── Block editors ───────────────────────────────────────────────────
+   One panel, opened in place of whatever was rendered: a formula, a table,
+   the preamble, a block of LaTeX the parser kept verbatim. The bar above
+   the source holds the parts of the block that aren't its content — which
+   environment it is, what it's labelled, how big the grid is — so the text
+   area holds only the content.
 
    One surface, not four. The bar used to sit on its own fill with a rule
    under it, the source on another, the preview on a third behind a dashed
@@ -919,7 +1042,7 @@
    panel whose whole job is to hold one formula. The fills are gone and the
    remaining separators are the faintest thing that still reads as a
    separation, so the eye goes to the maths rather than to the joinery. */
-.formula-editor {
+.block-editor {
   display: block;
   text-align: left;
   border: 1px solid var(--border-color);
@@ -932,7 +1055,7 @@
    weight of the choices they hold — which environment this is, and what
    it's called. It shares the source area's background so the two read as
    one panel. */
-.formula-editor__bar {
+.block-editor__bar {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -943,21 +1066,38 @@
   color: var(--text-secondary);
   overflow: visible;
 }
-.formula-editor {
+.block-editor {
   overflow: visible;
 }
-.formula-editor__spacer {
+.block-editor__spacer {
   flex: 1;
 }
-.formula-editor__env-name {
+.block-editor__body {
+  display: block;
+}
+/* What this block is, when that isn't a choice: `tabular`, `Preamble`. It
+   reads as a caption rather than as a control, because it isn't one. */
+.block-editor__name {
   font-family: var(--font-mono);
   color: var(--text-tertiary);
+}
+/* A measurement the author didn't ask for but wants while they're here —
+   the table's shape, the preamble's length. Quieter than the name. */
+.block-editor__note {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.block-editor__note:empty {
+  display: none;
 }
 
 /* The label is the only control here you type into, and an empty one is the
    difference between an equation you can \ref and one you can't — so it gets
    a caption and a field that looks like a field. */
-.formula-editor__label {
+.block-editor__label {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -969,36 +1109,36 @@
   color: var(--text-tertiary);
   transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
 }
-.formula-editor__label:hover {
+.block-editor__label:hover {
   background: var(--overlay-hover);
 }
-.formula-editor__label:focus-within {
+.block-editor__label:focus-within {
   background: var(--overlay-hover);
   border-color: var(--border-color);
   color: var(--text-secondary);
 }
 /* Once the equation has a name, the caption is redundant — the value says it. */
-.formula-editor__label--set .formula-editor__label-caption {
+.block-editor__label--set .block-editor__label-caption {
   display: none;
 }
-.formula-editor__label--set {
+.block-editor__label--set {
   color: var(--text-secondary);
 }
 /* The icon, the caption and the field all carry different font metrics, so
    centring the flex boxes alone leaves the text visibly stepped. Give each one
    the same line box and let align-items do the rest. */
-.formula-editor__label > svg {
+.block-editor__label > svg {
   display: block;
   flex: none;
 }
-.formula-editor__label-caption {
+.block-editor__label-caption {
   font-size: 10px;
   font-weight: 600;
   line-height: 16px;
   letter-spacing: 0.05em;
   text-transform: uppercase;
 }
-.formula-editor__label-input {
+.block-editor__label-input {
   width: 11ch;
   margin: 0;
   padding: 0;
@@ -1010,7 +1150,7 @@
   font-size: 11.5px;
   line-height: 16px;
 }
-.formula-editor__label-input::placeholder {
+.block-editor__label-input::placeholder {
   color: var(--text-tertiary);
   opacity: 0.7;
 }
@@ -1123,22 +1263,22 @@
   opacity: 0.7;
 }
 
-.formula-editor__grid {
+.block-editor__grid {
   display: inline-flex;
   gap: 3px;
 }
 /* Row/column controls mean nothing outside a grid, but hiding them
    entirely makes the bar jump every time a matrix is typed or deleted. */
-.formula-editor__grid--off {
+.block-editor__grid--off {
   opacity: 0.3;
   pointer-events: none;
 }
 /* In the cells view they're genuinely gone, not just inert — the dashed edge
    does the same job, and two ways to grow the same grid is one too many. */
-.formula-editor__grid--hidden {
+.block-editor__grid--hidden {
   display: none;
 }
-.formula-editor__button {
+.block-editor__button {
   display: inline-flex;
   align-items: center;
   gap: 1px;
@@ -1151,48 +1291,48 @@
   cursor: pointer;
   transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
 }
-.formula-editor__button:hover {
+.block-editor__button:hover {
   background: var(--overlay-hover);
   color: var(--text-primary);
 }
 /* `hidden` alone loses to the `display: inline-flex` above, so the source
    toggle stayed on the bar for formulas that have no grid to toggle to. */
-.formula-editor__button[hidden] {
+.block-editor__button[hidden] {
   display: none;
 }
 /* A pressed toggle, not a call to action: the accent fill made this the
    loudest thing in a panel whose subject is the formula. */
-.formula-editor__button--on {
+.block-editor__button--on {
   background: var(--overlay-hover);
   border-color: var(--border-color);
   color: var(--text-primary);
 }
-.formula-editor__button--on:hover {
+.block-editor__button--on:hover {
   background: var(--overlay-hover);
   border-color: var(--text-tertiary);
   color: var(--text-primary);
 }
 /* Last on the bar and quiet until you reach for it. */
-.formula-editor__button--danger {
+.block-editor__button--danger {
   padding: 0 6px;
   margin-left: 2px;
 }
-.formula-editor__button--danger:hover {
+.block-editor__button--danger:hover {
   color: var(--status-error, #e05252);
 }
-.formula-editor__hint {
+.block-editor__hint {
   font-size: 10px;
   color: var(--text-tertiary);
   white-space: nowrap;
 }
-.math-block__editor--hidden {
+.code-field--hidden {
   display: none;
 }
 
 /* ── Matrix cells ────────────────────────────────────────────────────
    A grid body edited as a grid. The dashed tracks on all four sides are
    the way to grow it: type in one and it becomes a real row or column. */
-.formula-editor__grid-host {
+.block-editor__grid-host {
   padding: 6px 16px 14px;
   overflow-x: auto;
 }
@@ -1248,22 +1388,29 @@
 }
 /* The source is the thing being worked on, so it gets the room: generous
    padding, a slightly larger face than the surrounding prose's monospace,
-   and line spacing loose enough that subscripts and braces don't collide. */
-.formula-editor .math-block__editor {
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  padding: 6px 16px 14px;
+   and line spacing loose enough that subscripts and braces don't collide.
+   The padding is shared with the highlight layer behind the field — see
+   `.code-field`, where the two layers are kept in agreement. */
+.block-editor .code-field--block {
+  --code-field-padding: 6px 16px 14px;
   font-size: 13px;
   line-height: 1.75;
 }
-.formula-editor .math-preview {
-  margin-top: 0;
+/* Whatever the panel is showing back to you: a rendered formula, a rendered
+   table. Separated from the source by the faintest thing that still reads
+   as a separation, so the eye goes to the content, not the joinery. */
+.block-editor__preview {
   padding: 14px 16px;
   border-top: 1px solid var(--border-subtle, var(--border-color));
   background: transparent;
 }
-.formula-editor--inline {
+.block-editor .math-preview {
+  margin-top: 0;
+}
+.block-editor--formula.block-editor--inline {
+  display: inline;
+}
+.block-editor--formula.block-editor--inline .block-editor__body {
   display: inline;
 }
 
@@ -1625,11 +1772,11 @@
    in the middle of a sentence, which is exactly what a stray keystroke in
    prose would look like too; the ring and the `$` delimiters say which mode
    the next character lands in without the author having to guess. */
-.formula-editor--inline {
+.block-editor--formula.block-editor--inline {
   position: relative;
 }
-.formula-editor--inline::before,
-.formula-editor--inline::after {
+.block-editor--formula.block-editor--inline::before,
+.block-editor--formula.block-editor--inline::after {
   content: '$';
   font-family: var(--font-mono);
   font-size: 0.85em;
@@ -1639,75 +1786,177 @@
   vertical-align: baseline;
   user-select: none;
 }
-.formula-editor--inline::before {
+.block-editor--formula.block-editor--inline::before {
   margin-right: 1px;
 }
-.formula-editor--inline::after {
+.block-editor--formula.block-editor--inline::after {
   margin-left: 1px;
 }
-.math-inline__editor {
-  display: inline-block;
-  vertical-align: baseline;
-  font-family: var(--font-mono);
-  font-size: 0.92em;
-  line-height: 1.4;
-  color: var(--text-primary);
-  caret-color: var(--math-edit);
-  background: var(--math-edit-soft);
-  border: 1px solid var(--math-edit);
-  border-radius: 3px;
-  padding: 0 4px;
-  margin: 0;
-  outline: none;
-  resize: none;
-  /* Auto-size to content in modern Chromium (Electron 39 = Chromium 132). */
-  field-sizing: content;
-  /* Sensible bounds so an empty input still has a target, and very long
-     formulas wrap in the next paragraph instead of pushing layout. */
-  min-width: 32px;
-  max-width: 100%;
-  /* WebKit's spellcheck red squigglies leak through field-sizing — disable
-     the appearance fallback styling for consistency. */
-  appearance: none;
-  -webkit-appearance: none;
-  box-shadow: none;
-}
-/* Focused is the normal state for this field — it opens focused — so the
-   ring is the difference between "this is the formula you're typing in" and
-   "this one merely happens to be open". */
-.math-inline__editor::placeholder {
-  color: var(--math-edit);
-  opacity: 0.45;
-}
-.math-inline__editor:focus {
-  border-color: var(--math-edit);
-  background: var(--math-edit-soft);
-  box-shadow: 0 0 0 3px var(--math-edit-ring);
-}
+/* ── Code fields ─────────────────────────────────────────────────────
+   A text field that shows what it holds is LaTeX.
 
-/* Block math editor — full-width, auto-grows by row, no resize grip. */
-.math-block__editor {
+   Two layers: a `<pre>` holding a highlighted copy, and the real textarea
+   on top of it with transparent glyphs, its own caret, and a selection
+   faint enough to read through. Everything that decides where a character
+   lands — font, size, line height, padding, wrapping — is declared once on
+   the wrapper and inherited by both, because the two disagreeing by a
+   single pixel is the colour sliding off the text. */
+.code-field {
+  position: relative;
   display: block;
-  width: 100%;
+  --code-field-padding: 8px 10px;
   font-family: var(--font-mono);
   font-size: 0.92em;
   line-height: 1.5;
+}
+.code-field--hidden {
+  display: none;
+}
+.code-field__highlight,
+.code-field__input {
+  box-sizing: border-box;
+  margin: 0;
+  border: 0;
+  padding: var(--code-field-padding);
+  font: inherit;
+  font-family: inherit;
+  letter-spacing: inherit;
+  line-height: inherit;
+  tab-size: 2;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: break-word;
+}
+.code-field__highlight {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+  border-radius: inherit;
   color: var(--text-primary);
-  background: var(--bg-secondary);
-  border: 1px solid transparent;
-  border-radius: 4px;
-  padding: 8px 10px;
+  background: transparent;
+}
+.code-field__input {
+  position: relative;
+  display: block;
+  width: 100%;
+  background: transparent;
+  /* The glyphs are painted by the layer behind; what belongs to the field
+     itself is the caret and the selection. */
+  color: transparent;
+  caret-color: var(--math-edit);
   outline: none;
   resize: none;
   overflow: hidden;
-  margin: 0;
   appearance: none;
   -webkit-appearance: none;
   box-shadow: none;
 }
-.math-block__editor:focus {
+/* A selection paints in the textarea's layer, over the colours. Opaque it
+   would blank them; at a quarter alpha the highlighted text reads through. */
+.code-field__input::selection {
+  background: var(--math-edit-ring);
+}
+.code-field__input::placeholder {
+  color: var(--text-tertiary);
+  opacity: 0.7;
+}
+/* A field holding something that isn't LaTeX has nothing to paint behind it,
+   so the text is the textarea's own again. */
+.code-field--plain .code-field__highlight {
+  display: none;
+}
+.code-field--plain .code-field__input {
+  color: var(--text-primary);
+}
+.code-field--plain .code-field__input::selection {
+  background: var(--bg-secondary);
+}
+
+/* An inline field is sized by its content, so the input stays in flow and
+   the wrapper takes its width; only the highlight layer is positioned. */
+.code-field--inline {
+  display: inline-block;
+  vertical-align: baseline;
+  --code-field-padding: 0 4px;
+}
+.code-field--inline .code-field__highlight,
+.code-field--inline .code-field__input {
+  white-space: pre;
+  word-break: normal;
+}
+.code-field--inline .code-field__input {
+  display: inline-block;
+  width: auto;
+  /* Auto-size to content in modern Chromium (Electron 39 = Chromium 132). */
+  field-sizing: content;
+  /* Bounds so an empty field still has a target, and a very long formula
+     wraps in the next paragraph instead of pushing layout. */
+  min-width: 32px;
+  max-width: 100%;
+}
+
+/* The inline chip's ring belongs to the wrapper, since the input inside it
+   is transparent — see `.code-field`. Focused is this field's normal state
+   (it opens focused), so the ring is the difference between "this is the
+   formula you're typing in" and "this one merely happens to be open". */
+.code-field--math-inline {
+  background: var(--math-edit-soft);
+  border: 1px solid var(--math-edit);
+  border-radius: 3px;
+  line-height: 1.4;
+}
+.code-field--math-inline:focus-within {
+  box-shadow: 0 0 0 3px var(--math-edit-ring);
+}
+.code-field--math-inline .code-field__input::placeholder {
+  color: var(--math-edit);
+  opacity: 0.45;
+}
+
+/* Block math editor — full-width, auto-grows by row, no resize grip. */
+.code-field--math {
+  background: var(--bg-secondary);
+  border: 1px solid transparent;
+  border-radius: 4px;
+}
+.code-field--math:focus-within {
   border-color: var(--border-color);
   background: var(--bg-primary);
+}
+
+/* The colours. Two hues and a weight, deliberately: macros carry the app's
+   maths hue, environment names carry its reference hue, and the characters
+   that give a body its structure (`&`, `\\`) stand out by weight rather
+   than by a third colour. Anything louder and a formula reads as a parse
+   tree instead of as maths. */
+.code-field__highlight .tok--comment {
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+.code-field__highlight .tok--command {
+  color: var(--code-macro);
+}
+.code-field__highlight .tok--env {
+  color: var(--code-env);
+}
+.code-field__highlight .tok--brace {
+  color: var(--text-tertiary);
+}
+.code-field__highlight .tok--math {
+  color: var(--code-macro);
+  font-weight: 600;
+}
+.code-field__highlight .tok--separator {
+  color: var(--text-secondary);
+  font-weight: 700;
+}
+.code-field__highlight .tok--script {
+  color: var(--text-secondary);
+}
+.code-field__highlight .tok--number {
+  color: var(--code-number);
 }
 
 .figure-block { margin: 1.2em 0; text-align: center; }
@@ -1862,32 +2111,14 @@
   border-color: var(--accent-color, var(--text-secondary));
   background: var(--overlay-hover, var(--bg-secondary));
 }
-.raw-latex-block--editing {
-  padding: 0;
-  border-color: var(--accent-color, var(--text-primary));
-  background: var(--bg-secondary);
-}
+/* While its editor is open the block is a container, not a target: the panel
+   inside brings its own border, and two of them a pixel apart read as a seam. */
+.raw-latex-block--editing,
 .raw-latex-block--editing:hover {
-  background: var(--bg-secondary);
-}
-.raw-latex-block__editor {
-  font-family: var(--font-mono);
-  font-size: inherit;
-  line-height: inherit;
+  padding: 0;
+  border-color: transparent;
   background: transparent;
-  color: var(--text-primary);
-  border: 0;
-  border-radius: 4px;
-  padding: 8px 12px;
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  box-sizing: border-box;
-  width: 100%;
-  display: block;
-  resize: none;
-  outline: none;
-  overflow: hidden;
+  cursor: default;
 }
 
 /* Rich-rendered raw-LaTeX blocks (algorithm, tabular). The wrapper still
@@ -1998,31 +2229,106 @@
   font-style: italic;
 }
 
-.preamble-block { margin: 0 0 1.5em 0; font-family: var(--font-mono); }
+/* ── Preamble ────────────────────────────────────────────────────────
+   Collapsed to one row by default — it is the document's configuration, not
+   its argument — and opened into the same panel every other block opens
+   into. The closed row says what it is hiding: how long it is, and how many
+   packages the document loads, which is the question someone actually opens
+   a preamble to answer. */
+.preamble-block {
+  margin: 0 0 1.5em 0;
+  font-family: var(--font-mono);
+}
 .preamble-block__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   text-align: left;
   background: var(--bg-secondary);
   color: var(--text-secondary);
-  border: 0;
-  border-radius: 4px;
-  padding: 6px 10px;
-  font-family: var(--font-mono);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-family: var(--font-sans);
   font-size: 11px;
   cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
 }
-.preamble-block__header:hover { background: var(--overlay-hover); }
-.preamble-block__editor {
-  width: 100%;
-  margin-top: 6px;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  background: var(--bg-secondary);
-  color: var(--text-primary);
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  padding: 8px 10px;
-  resize: vertical;
+.preamble-block__header:hover {
+  background: var(--overlay-hover);
+  border-color: var(--border-color);
+}
+.preamble-block__header > svg {
+  flex: none;
+  color: var(--text-tertiary);
+}
+.preamble-block__title {
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--text-secondary);
+}
+.preamble-block__meta {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Only under the pointer: it is an instruction, and an instruction that is
+   always on screen is decoration by the second time you read it. */
+.preamble-block__hint {
+  flex: none;
+  opacity: 0;
+  color: var(--text-tertiary);
+  transition: opacity 0.12s ease;
+}
+.preamble-block__header:hover .preamble-block__hint {
+  opacity: 1;
+}
+/* The preamble runs to dozens of lines; let the panel scroll rather than
+   pushing the first paragraph of the paper off the screen. */
+.block-editor--preamble .code-field {
+  --code-field-padding: 8px 14px 14px;
+  max-height: 55vh;
+  overflow-y: auto;
+}
+.block-editor--preamble .code-field__input {
+  overflow: hidden;
+}
+
+/* ── Table editor ────────────────────────────────────────────────────
+   The panel a table opens in. The preview underneath is the same renderer
+   that draws the table when the editor is closed, so what you are editing
+   and what you will get cannot drift apart. */
+.block-editor--tabular .code-field {
+  --code-field-padding: 6px 16px 14px;
+  max-height: 45vh;
+  overflow-y: auto;
+}
+.block-editor--tabular .code-field__input,
+.block-editor--raw .code-field__input {
+  overflow: hidden;
+}
+.block-editor--raw .code-field {
+  --code-field-padding: 6px 16px 14px;
+  max-height: 55vh;
+  overflow-y: auto;
+}
+.block-editor__preview--tabular {
+  font-family: var(--font-serif);
+  color: var(--paper-text, var(--text-primary));
+  overflow-x: auto;
+}
+/* Half-typed source is a normal state to be in, not an error to be shouted
+   at about — say what is missing and stay out of the way. */
+.block-editor__preview--invalid {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  text-align: center;
 }
 
 /* ── Theorem-like callouts (theorem, lemma, definition, …) ────────── */
@@ -3054,23 +3360,27 @@
   overflow-x: auto;
   tab-size: 4;
 }
-.code-block--editing { border-color: var(--accent-color, var(--text-primary)); }
-.code-block__editor {
-  display: block;
-  width: 100%;
-  box-sizing: border-box;
-  margin: 0;
-  padding: 12px 16px;
-  border: 0;
-  outline: none;
-  resize: none;
-  overflow: hidden;
+/* While its editor is open the listing is a container, not a target: the
+   panel inside brings its own border and background. */
+.code-block--editing,
+.code-block--editing:hover {
+  border-color: transparent;
   background: transparent;
-  color: var(--text-primary);
-  font-family: var(--font-mono);
+  cursor: default;
+}
+/* Code, not prose: it keeps its own line breaks and scrolls sideways rather
+   than wrapping, which would misrepresent the file it came from. */
+.code-field--code {
+  --code-field-padding: 10px 16px 14px;
   font-size: 0.82em;
   line-height: 1.55;
+  max-height: 55vh;
+  overflow: auto;
+}
+.code-field--code .code-field__input {
   white-space: pre;
+  word-break: normal;
+  overflow: auto;
   tab-size: 4;
 }
 

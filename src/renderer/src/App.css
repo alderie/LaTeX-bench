@@ -1092,8 +1092,63 @@
   font-family: var(--font-mono);
   color: var(--text-tertiary);
 }
+/* The table's shape: a measurement to read, and — on a double-click — the
+   shortest way to say what it should be instead. It stays a caption until
+   then; chrome around it would make the bar look like it holds two fields
+   when it holds one field and a number. */
+.block-editor__shape {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.block-editor__shape--empty {
+  display: none;
+}
+.block-editor__shape-note {
+  cursor: text;
+  padding: 0 2px;
+  border-radius: 3px;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.block-editor__shape-note:hover {
+  background: var(--overlay-hover);
+  color: var(--text-secondary);
+}
+.block-editor__shape-fields {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.block-editor__shape-fields[hidden] {
+  display: none;
+}
+.block-editor__shape-input {
+  width: 3ch;
+  margin: 0;
+  padding: 0 2px;
+  border: 1px solid var(--math-edit);
+  border-radius: 3px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  outline: none;
+  caret-color: var(--math-edit);
+}
+.block-editor__shape-input:focus {
+  box-shadow: 0 0 0 2px var(--math-edit-ring);
+}
+.block-editor__shape-times {
+  color: var(--text-tertiary);
+}
+
 /* A measurement the author didn't ask for but wants while they're here —
-   the table's shape, the preamble's length. Quieter than the name. */
+   the preamble's length, a warning. Quieter than the name. */
 .block-editor__note {
   font-family: var(--font-sans);
   font-size: 10px;
@@ -1362,9 +1417,30 @@
    `display: inline-block` on one would take the table apart. */
 span.source-cell--empty {
   display: inline-block;
-  min-width: 0.8em;
+  min-width: 1.1em;
   min-height: 1em;
-  background: var(--math-edit-soft);
+  /* The same dashed placeholder a table's empty cells get, so "nothing here
+     yet, click it" looks the same in a matrix as in a table. */
+  border: 1px dashed color-mix(in srgb, var(--text-tertiary) 45%, transparent);
+  border-radius: 3px;
+}
+span.source-cell--empty:hover {
+  border-color: var(--math-edit);
+}
+/* A table's empty cells say so with a placeholder instead, since a `<td>`
+   holding nothing collapses its whole row — a table resized from 2×3 to 4×5
+   showed two rows and a gap. Only inside an editor: an empty cell in the
+   document is an empty cell, not an invitation. */
+.block-editor__preview .cell-blank {
+  display: inline-block;
+  min-width: 2.4em;
+  height: 1.05em;
+  vertical-align: middle;
+  border: 1px dashed color-mix(in srgb, var(--text-tertiary) 45%, transparent);
+  border-radius: 3px;
+}
+.block-editor__preview td:hover .cell-blank {
+  border-color: var(--math-edit);
 }
 /* Under the open field, so the two don't show through each other. Faded for
    a span; tinted for a `<td>`, whose opacity would take its share of the

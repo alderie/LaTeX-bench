@@ -13,7 +13,8 @@
 //     would change what arguments are required, which is not a one-click edit
 //   - the column spec is metadata, so it's a field: `@{}llrr@{}` is the one
 //     part of a table you edit as a string rather than as content
-//   - the shape is a measurement, so it's a note
+//   - the shape is a measurement, so it's a caption — one you can double-click
+//     to set, since `5 × 4` is also the shortest way to say what you want
 //   - the source is the only thing left, so it's the only thing in the text
 //     area — highlighted, because `&` and `\\` are what you navigate by
 //
@@ -24,15 +25,20 @@
 // the source instead means counting `&`s in a line that wraps twice.
 //
 // Growing the table is part of walking it — Tab past the last cell makes a
-// column, Enter past the last row makes a row — so the bar has no buttons for
-// it. It had two, from when the source area was the only way in and a row
-// break had to be typed by hand.
+// column, Enter past the last row makes a row, or the shape in the bar says
+// how many of each there should be — so the bar has no buttons for it. It had
+// two, from when the source area was the only way in and a row break had to
+// be typed by hand.
 
+// A table's row is a run of `&`-separated cells, which is what this knows
+// how to write into — the same rule that keeps a matrix's source readable.
+import { writeCell } from '../math-source'
 import { isTabularSource, renderEditableTabular } from '../renderers/tabular'
 import {
   addTabularColumn,
   addTabularRow,
   setTabularColumnSpec,
+  setTabularShape,
   tabularColumnSpec,
   tabularShape
 } from '../renderers/tabular-edit'
@@ -40,7 +46,8 @@ import { createHeaderField, type HeaderField } from '../nodeviews/header-field'
 import { CellEditor, type CellSite } from './cell-editor'
 import { CodeField } from './code-field'
 import { EditHistory } from './edit-history'
-import { bindFinishKeys, EditorPanel, panelName, panelNote } from './editor-panel'
+import { createShapeField, type ShapeField } from './shape-field'
+import { bindFinishKeys, EditorPanel, panelName } from './editor-panel'
 
 export interface TabularEditorOptions {
   source: string
@@ -57,7 +64,7 @@ export class TabularEditor {
   private panel: EditorPanel
   private code: CodeField
   private preview: HTMLElement
-  private shapeNote: HTMLElement
+  private shape: ShapeField
   private colSpec: HeaderField
   private cellEditor: CellEditor
   private cells: CellSite[] = []
@@ -90,8 +97,12 @@ export class TabularEditor {
     })
     this.panel.addControl(this.colSpec.dom)
 
-    this.shapeNote = panelNote('')
-    this.panel.addControl(this.shapeNote)
+    this.shape = createShapeField({
+      title: 'Rows × columns — double-click to set',
+      onCommit: (rows, columns) => this.resize(rows, columns),
+      onDone: () => this.code.focus()
+    })
+    this.panel.addControl(this.shape.dom)
 
     this.code = new CodeField({
       value: options.source,
@@ -218,18 +229,35 @@ export class TabularEditor {
 
   private reflectShape(): void {
     const { rows, columns } = tabularShape(this.code.value)
-    this.shapeNote.textContent = rows > 0 ? `${rows} × ${columns}` : ''
+    this.shape.setValue(rows, columns)
+  }
+
+  /**
+   * Resize the table to the shape typed into the bar.
+   *
+   * The cells it makes are empty, so the edit isn't finished when the source
+   * is: the caret goes to the first of them, in the rendering, which is where
+   * the author was looking when they asked for it.
+   */
+  private resize(rows: number, columns: number): void {
+    const before = new Set(this.cells.map((cell) => `${cell.row}:${cell.column}`))
+    this.apply((source) => setTabularShape(source, { rows, columns }))
+    this.paint()
+    const made = this.cells.find(
+      (cell) => cell.from === cell.to && !before.has(`${cell.row}:${cell.column}`)
+    )
+    if (made) this.cellEditor.openAt(made.grid, made.row, made.column)
   }
 
   /** Write a cell's new text into the source, from an edit in the preview. */
   private writeCellText(cell: CellSite, text: string): number {
-    const source = this.code.value
-    this.code.value = source.slice(0, cell.from) + text + source.slice(cell.to)
+    const result = writeCell(this.code.value, cell.from, cell.to, text)
+    this.code.value = result.body
     this.reflectShape()
     // Typing in a cell coalesces the way typing in the source does, so undo
     // goes back to what the cell held rather than a letter at a time.
     this.history.record(this.code.value, cell.from, 'type')
-    return cell.from + text.length
+    return result.to
   }
 
   /** Redraw the table now — not on the next frame — and re-find its cells. */

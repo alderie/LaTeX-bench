@@ -429,6 +429,13 @@ function parseTabular(source: string): ParsedTabular | null {
   return { rows, bottomRule, bottomCmids, numCols, colSpec }
 }
 
+/** Where a cell with nothing in it is, for a surface that wants to show it. */
+function blankMarker(): HTMLElement {
+  const marker = document.createElement('span')
+  marker.className = 'cell-blank'
+  return marker
+}
+
 export interface TabularRendering {
   dom: HTMLElement
   /** Every cell, tagged with the source it came from — see `CellEditor`. */
@@ -485,6 +492,11 @@ export function renderEditableTabular(source: string): TabularRendering {
       }
       if (coveredByCmid) td.classList.add('tabular-block__cell--cmid')
       td.appendChild(renderInlineLatex(cell.content))
+      // An empty cell draws nothing, which in a rendering that can be edited
+      // is nothing to aim at — a table resized from 2×3 to 4×5 would show two
+      // rows and a gap. The marker is inert until an editor's CSS gives it a
+      // size; in the document, an empty cell stays empty.
+      if (cell.content === '') td.appendChild(blankMarker())
       cells.push(
         markCell(td, { grid: 0, row: r, column: cell.column, from: cell.from, to: cell.to })
       )

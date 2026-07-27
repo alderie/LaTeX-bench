@@ -69,7 +69,7 @@ describe('the table editor', () => {
   it('names the environment and the shape on its bar', () => {
     const { editor } = open()
     expect(editor.dom.querySelector('.block-editor__name')?.textContent).toBe('tabular')
-    expect(editor.dom.querySelector('.block-editor__note')?.textContent).toBe('2 × 3')
+    expect(editor.dom.querySelector('.block-editor__shape-note')?.textContent).toBe('2 × 3')
   })
 
   it('puts the column spec in a field rather than in the text', () => {
@@ -206,7 +206,7 @@ describe('the table editor', () => {
       const { editor, field } = open()
       click(cells(editor).pop() as HTMLElement)
       press(cellField(editor), 'Tab')
-      expect(editor.dom.querySelector('.block-editor__note')?.textContent).toBe('2 × 4')
+      expect(editor.dom.querySelector('.block-editor__shape-note')?.textContent).toBe('2 × 4')
       expect(field.value).toContain('{@{}lccc@{}}')
     })
 
@@ -214,7 +214,7 @@ describe('the table editor', () => {
       const { editor } = open()
       click(cells(editor)[3])
       press(cellField(editor), 'Enter')
-      expect(editor.dom.querySelector('.block-editor__note')?.textContent).toBe('3 × 3')
+      expect(editor.dom.querySelector('.block-editor__shape-note')?.textContent).toBe('3 × 3')
       expect(cellField(editor).value).toBe('')
     })
 
@@ -237,6 +237,92 @@ describe('the table editor', () => {
       expect(cellField(editor).value).toBe('Stable index')
       type(cellField(editor), 'Tail index')
       expect(field.value).toContain('\\multicolumn{2}{c}{Tail index}')
+    })
+  })
+
+  describe('the shape in the bar', () => {
+    function shapeNote(editor: TabularEditor): HTMLElement {
+      return editor.dom.querySelector('.block-editor__shape-note') as HTMLElement
+    }
+
+    function fields(editor: TabularEditor): HTMLInputElement[] {
+      return [...editor.dom.querySelectorAll<HTMLInputElement>('.block-editor__shape-input')]
+    }
+
+    function openShape(editor: TabularEditor): HTMLInputElement[] {
+      shapeNote(editor).dispatchEvent(new window.MouseEvent('dblclick', { bubbles: true }))
+      return fields(editor)
+    }
+
+    it('turns into two fields on a double-click, holding what it said', () => {
+      const { editor } = open()
+      const [rows, columns] = openShape(editor)
+      expect([rows.value, columns.value]).toEqual(['2', '3'])
+    })
+
+    it('is a caption until then', () => {
+      const { editor } = open()
+      const strip = editor.dom.querySelector('.block-editor__shape-fields') as HTMLElement
+      expect(strip.hidden).toBe(true)
+      expect(shapeNote(editor).textContent).toBe('2 × 3')
+    })
+
+    it('adds the rows asked for, empty, above the closing rule', () => {
+      const { editor, field } = open()
+      const [rows] = openShape(editor)
+      rows.value = '4'
+      press(rows, 'Enter')
+      expect(shapeNote(editor).textContent).toBe('4 × 3')
+      expect(field.value).toContain('SGD & 4.81 & 0.92')
+      expect(field.value.indexOf('\\bottomrule')).toBeGreaterThan(field.value.indexOf('&  & '))
+    })
+
+    it('adds the columns asked for, spec and all', () => {
+      const { editor, field } = open()
+      const [, columns] = openShape(editor)
+      columns.value = '5'
+      press(columns, 'Enter')
+      expect(shapeNote(editor).textContent).toBe('2 × 5')
+      expect(field.value).toContain('{@{}lcccc@{}}')
+    })
+
+    it('lands in the first cell it made, so it can be typed into', () => {
+      const { editor } = open()
+      const [rows] = openShape(editor)
+      rows.value = '3'
+      press(rows, 'Enter')
+      const cell = editor.dom.querySelector('.cell-editor input') as HTMLInputElement
+      expect(cell).not.toBeNull()
+      expect(cell.value).toBe('')
+    })
+
+    it('takes rows away too, which the undo puts back', () => {
+      const { editor, field } = open()
+      const [rows] = openShape(editor)
+      rows.value = '1'
+      press(rows, 'Enter')
+      expect(field.value).not.toContain('SGD')
+      press(editor.dom, 'z', { metaKey: true })
+      expect(field.value).toBe(TABLE)
+    })
+
+    it('keeps the table as it was on Escape', () => {
+      const { editor, field, cancel } = open()
+      const [rows] = openShape(editor)
+      rows.value = '9'
+      press(rows, 'Escape')
+      expect(field.value).toBe(TABLE)
+      expect(shapeNote(editor).textContent).toBe('2 × 3')
+      // Escape in a header field is "not this number", not "not this table".
+      expect(cancel).not.toHaveBeenCalled()
+    })
+
+    it('ignores a number that isn’t one', () => {
+      const { editor, field } = open()
+      const [rows] = openShape(editor)
+      rows.value = 'lots'
+      press(rows, 'Enter')
+      expect(field.value).toBe(TABLE)
     })
   })
 

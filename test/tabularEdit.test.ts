@@ -3,7 +3,11 @@ import {
   addTabularColumn,
   addTabularRow,
   growColumnSpec,
+  removeTabularColumn,
+  removeTabularRow,
   setTabularColumnSpec,
+  setTabularShape,
+  shrinkColumnSpec,
   tabularColumnCount,
   tabularShape
 } from '@renderer/editor/wysiwyg/renderers/tabular-edit'
@@ -98,5 +102,69 @@ describe('the column spec', () => {
     const other = '\\begin{align}a &= b\\end{align}'
     expect(addTabularRow(other)).toBe(other)
     expect(addTabularColumn(other)).toBe(other)
+  })
+})
+
+describe('setting the shape', () => {
+  it('grows to the shape asked for, with the new cells empty', () => {
+    const next = setTabularShape(TABLE, { rows: 5, columns: 4 })
+    expect(tabularShape(next)).toEqual({ rows: 5, columns: 4 })
+    expect(next).toContain('{@{}lccc@{}}')
+    // The rows that were there keep what was in them.
+    expect(next).toContain('SGD & 4.81 & 0.92 &')
+  })
+
+  it('shrinks, and takes the column out of the spec with it', () => {
+    const next = setTabularShape(TABLE, { rows: 2, columns: 2 })
+    expect(tabularShape(next)).toEqual({ rows: 2, columns: 2 })
+    expect(next).toContain('{@{}lc@{}}')
+    expect(next).toContain('Method & Acc \\\\')
+    expect(next).not.toContain('CMD')
+  })
+
+  it('leaves the rules where they are when a row goes', () => {
+    // The `\midrule` divides the header from the body. Deleting the body's
+    // last row is not a reason to lose it — adding a row back wouldn't
+    // bring it with it.
+    const next = setTabularShape(TABLE, { rows: 1 })
+    expect(next).toContain('\\toprule')
+    expect(next).toContain('\\midrule')
+    expect(next).toContain('\\bottomrule')
+    expect(tabularShape(next).rows).toBe(1)
+  })
+
+  it('keeps at least one row and one column', () => {
+    const next = setTabularShape(TABLE, { rows: 0, columns: 0 })
+    expect(tabularShape(next)).toEqual({ rows: 1, columns: 1 })
+  })
+
+  it('changes nothing when asked for the shape it already has', () => {
+    expect(setTabularShape(TABLE, { rows: 3, columns: 3 })).toBe(TABLE)
+  })
+
+  it('drops the last column of every row, not the last row\'s', () => {
+    const next = removeTabularColumn(TABLE)
+    expect(next).toContain('Method & Acc \\\\')
+    expect(next).toContain('SGD & 4.81 \\\\')
+    expect(next).toContain('CMD & 0.84 \\\\')
+  })
+
+  it('refuses to remove the last row or column there is', () => {
+    const one = '\\begin{tabular}{l}\n  a \\\\\n\\end{tabular}'
+    expect(removeTabularRow(one)).toBe(one)
+    expect(removeTabularColumn(one)).toBe(one)
+  })
+
+  it('takes a column out of the spec from where the column was', () => {
+    expect(shrinkColumnSpec('@{}lrr@{}')).toBe('@{}lr@{}')
+    expect(shrinkColumnSpec('|c|c|')).toBe('|c||')
+    expect(shrinkColumnSpec('lp{3cm}')).toBe('l')
+    // Never down to nothing: a spec with no columns renders as no table.
+    expect(shrinkColumnSpec('l')).toBe('l')
+  })
+
+  it('leaves a source that is not a table alone', () => {
+    const other = '\\begin{align}a &= b\\end{align}'
+    expect(setTabularShape(other, { rows: 4, columns: 4 })).toBe(other)
   })
 })

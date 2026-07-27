@@ -545,8 +545,11 @@ const nodes: { [name: string]: NodeSpec } = {
         {
           'data-bibitem': '',
           'data-key': key,
+          // `latex-cite-`, not `latex-anchor-`: bibitem keys and \label keys
+          // are different namespaces in LaTeX, and sharing one id space here
+          // let a citation land on a same-named theorem.
           ...(key
-            ? { id: `latex-anchor-${key.replace(/[^a-zA-Z0-9_-]/g, '-')}` }
+            ? { id: `latex-cite-${key.replace(/[^a-zA-Z0-9_-]/g, '-')}` }
             : {}),
           ...(node.attrs.label ? { 'data-label': node.attrs.label as string } : {})
         },

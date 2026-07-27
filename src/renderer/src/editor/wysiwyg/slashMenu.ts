@@ -1,4 +1,4 @@
-import { Plugin, PluginKey, TextSelection, type EditorState } from 'prosemirror-state'
+import { NodeSelection, Plugin, PluginKey, TextSelection, type EditorState } from 'prosemirror-state'
 import type { EditorView } from 'prosemirror-view'
 import type { Node as PMNode } from 'prosemirror-model'
 import { latexSchema } from './schema'
@@ -74,9 +74,23 @@ function replaceWithBlock(
   view.focus()
 }
 
-/** Replace the `/query` text with an inline node. */
-function replaceWithInline(view: EditorView, from: number, to: number, node: PMNode): void {
+/**
+ * Replace the `/query` text with an inline node.
+ *
+ * `select` leaves a NodeSelection on the inserted node, which is how a node
+ * view learns to open its editor: picking "Inline math" from the menu is a
+ * statement of intent to type a formula, so landing on a rendered `x` that
+ * has to be clicked is a step nobody wanted.
+ */
+function replaceWithInline(
+  view: EditorView,
+  from: number,
+  to: number,
+  node: PMNode,
+  select = false
+): void {
   const tr = view.state.tr.replaceWith(from, to, node)
+  if (select) tr.setSelection(NodeSelection.create(tr.doc, from))
   view.dispatch(tr.scrollIntoView())
   view.focus()
 }
@@ -192,8 +206,11 @@ const STATIC_ITEMS: SlashItem[] = [
     hint: '$…$',
     keywords: 'math formula inline',
     group: 'Math',
+    // Empty, not a placeholder `x`: the editor opens on it immediately, so a
+    // seed value would only be something to delete first. An edit left blank
+    // takes the node with it — see MathNodeView.
     run: (v, f, t) =>
-      replaceWithInline(v, f, t, latexSchema.nodes.mathInline.create({ latex: 'x' }))
+      replaceWithInline(v, f, t, latexSchema.nodes.mathInline.create({ latex: '' }), true)
   },
   {
     title: 'Table',
@@ -380,6 +397,9 @@ function matchingItems(query: string): SlashItem[] {
 
 // ── The plugin ─────────────────────────────────────────────────────────
 
+/** Mirrors `max-height` on `.slash-menu`; the placement maths needs the number. */
+const SLASH_MENU_MAX_HEIGHT = 320
+
 // A `/` only opens the menu at a word boundary, so a URL or a maths
 // expression typed in prose doesn't trigger it.
 function opensMenu(state: EditorState, pos: number): boolean {
@@ -486,12 +506,39 @@ class SlashMenuView {
       return
     }
     this.dom.style.display = 'block'
-    // Flip above the caret when there isn't room below.
-    const height = this.dom.offsetHeight
-    const below = window.innerHeight - coords.bottom
-    const top = below < height + 16 ? coords.top - height - 6 : coords.bottom + 6
-    this.dom.style.top = `${Math.max(8, top)}px`
-    this.dom.style.left = `${Math.min(coords.left, window.innerWidth - this.dom.offsetWidth - 12)}px`
+    this.position(coords)
+  }
+
+  /**
+   * Place the menu next to the caret without ever covering it.
+   *
+   * The previous version flipped above when the menu didn't fit below, then
+   * clamped the result to the top of the window — so a tall menu near the
+   * middle of a short window landed at y=8 and sat right on top of the line
+   * being typed. Capping the height to the room on the chosen side is what
+   * makes the flip honest: the menu scrolls instead of spilling over the
+   * caret.
+   */
+  private position(coords: { top: number; bottom: number; left: number }): void {
+    const MARGIN = 8
+    const GAP = 6
+    const MIN_HEIGHT = 140
+
+    // Measure unclamped, so the side is chosen on what the menu wants rather
+    // than on the cap a previous placement left behind.
+    this.dom.style.maxHeight = ''
+    const wanted = this.dom.offsetHeight
+    const below = window.innerHeight - coords.bottom - GAP - MARGIN
+    const above = coords.top - GAP - MARGIN
+    const placeBelow = below >= wanted || below >= above
+
+    const room = Math.max(MIN_HEIGHT, Math.min(SLASH_MENU_MAX_HEIGHT, placeBelow ? below : above))
+    this.dom.style.maxHeight = `${room}px`
+    const height = Math.min(wanted, room)
+
+    const top = placeBelow ? coords.bottom + GAP : coords.top - GAP - height
+    this.dom.style.top = `${Math.max(MARGIN, top)}px`
+    this.dom.style.left = `${Math.max(MARGIN, Math.min(coords.left, window.innerWidth - this.dom.offsetWidth - 12))}px`
     this.scrollSelectedIntoView()
   }
 

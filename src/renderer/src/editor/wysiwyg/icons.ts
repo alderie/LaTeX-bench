@@ -139,6 +139,33 @@ const ICONS: Record<string, Shape[]> = {
     ['path', { d: 'M15 3v18' }]
   ],
   chevronDown: [['path', { d: 'm6 9 6 6 6-6' }]],
+  // Environment glyphs. Each draws the *shape* the environment lays maths
+  // out in — aligned columns, centred stack, staggered overflow — so the
+  // dropdown can be read at a glance without parsing the names.
+  alignEnv: [
+    ['path', { d: 'M4 9h5' }],
+    ['path', { d: 'M4 15h5' }],
+    ['path', { d: 'M11 9h2' }],
+    ['path', { d: 'M11 15h2' }],
+    ['path', { d: 'M15 9h5' }],
+    ['path', { d: 'M15 15h5' }]
+  ],
+  gatherEnv: [
+    ['path', { d: 'M7 7h10' }],
+    ['path', { d: 'M5 12h14' }],
+    ['path', { d: 'M8 17h8' }]
+  ],
+  multlineEnv: [
+    ['path', { d: 'M4 7h11' }],
+    ['path', { d: 'M7 12h10' }],
+    ['path', { d: 'M9 17h11' }]
+  ],
+  // A single centred line: one formula on its own, unnumbered.
+  displayEnv: [
+    ['path', { d: 'M6 4v16' }],
+    ['path', { d: 'M18 4v16' }],
+    ['path', { d: 'M9 12h6' }]
+  ],
   enter: [
     ['path', { d: 'M20 4v7a4 4 0 0 1-4 4H4' }],
     ['path', { d: 'm9 10-5 5 5 5' }]

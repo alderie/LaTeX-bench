@@ -34,6 +34,15 @@ interface Entry {
   /** Defaults to the name; set when the bare macro renders as nothing. */
   preview?: string
   detail: string
+  /**
+   * A multi-cell construction — a matrix, a piecewise definition, a system.
+   * These are the entries worth surfacing on a plain word (see
+   * `structureQuery`), because nobody remembers that a bracketed matrix is
+   * spelled `bmatrix` and a braced one `Bmatrix`.
+   */
+  structure?: boolean
+  /** Words that should find this entry besides its own name. */
+  keywords?: string[]
 }
 
 // `$` marks where the caret goes; stripped before insertion.
@@ -141,9 +150,15 @@ const CATALOGUE: Entry[] = [
 
   // Structure inside a formula
   { name: '\\begin', insert: '\\begin{$}\n\n\\end{}', preview: '\\text{environment}', detail: 'environment' },
-  { name: '\\pmatrix', insert: '\\begin{pmatrix}\n  $ & \\\\\n   & \n\\end{pmatrix}', preview: '\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}', detail: 'matrix ( )' },
-  { name: '\\bmatrix', insert: '\\begin{bmatrix}\n  $ & \\\\\n   & \n\\end{bmatrix}', preview: '\\begin{bmatrix} a & b \\\\ c & d \\end{bmatrix}', detail: 'matrix [ ]' },
-  { name: '\\cases', insert: '\\begin{cases}\n  $ & \\\\\n   & \n\\end{cases}', preview: '\\begin{cases} a & x > 0 \\\\ b & x \\le 0 \\end{cases}', detail: 'piecewise' },
+  { name: '\\pmatrix', insert: '\\begin{pmatrix}\n  $ & \\\\\n   & \n\\end{pmatrix}', preview: '\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}', detail: 'matrix ( )', structure: true, keywords: ['matrix', 'grid', 'table', 'array', 'parens'] },
+  { name: '\\bmatrix', insert: '\\begin{bmatrix}\n  $ & \\\\\n   & \n\\end{bmatrix}', preview: '\\begin{bmatrix} a & b \\\\ c & d \\end{bmatrix}', detail: 'matrix [ ]', structure: true, keywords: ['matrix', 'grid', 'table', 'array', 'brackets'] },
+  { name: '\\vmatrix', insert: '\\begin{vmatrix}\n  $ & \\\\\n   & \n\\end{vmatrix}', preview: '\\begin{vmatrix} a & b \\\\ c & d \\end{vmatrix}', detail: 'determinant | |', structure: true, keywords: ['matrix', 'determinant', 'det'] },
+  { name: '\\Bmatrix', insert: '\\begin{Bmatrix}\n  $ & \\\\\n   & \n\\end{Bmatrix}', preview: '\\begin{Bmatrix} a & b \\\\ c & d \\end{Bmatrix}', detail: 'matrix { }', structure: true, keywords: ['matrix', 'braces', 'set'] },
+  { name: '\\matrix', insert: '\\begin{matrix}\n  $ & \\\\\n   & \n\\end{matrix}', preview: '\\begin{matrix} a & b \\\\ c & d \\end{matrix}', detail: 'matrix, no delimiters', structure: true, keywords: ['matrix', 'grid', 'plain'] },
+  { name: '\\cases', insert: '\\begin{cases}\n  $ & \\\\\n   & \n\\end{cases}', preview: '\\begin{cases} a & x > 0 \\\\ b & x \\le 0 \\end{cases}', detail: 'piecewise', structure: true, keywords: ['cases', 'piecewise', 'branch', 'if', 'system'] },
+  { name: '\\aligned', insert: '\\begin{aligned}\n  $ &= \\\\\n   &= \n\\end{aligned}', preview: '\\begin{aligned} a &= b \\\\ c &= d \\end{aligned}', detail: 'aligned rows', structure: true, keywords: ['align', 'aligned', 'derivation', 'steps'] },
+  { name: '\\array', insert: '\\begin{array}{cc}\n  $ & \\\\\n   & \n\\end{array}', preview: '\\begin{array}{cc} a & b \\\\ c & d \\end{array}', detail: 'array with column spec', structure: true, keywords: ['array', 'table', 'grid', 'columns'] },
+  { name: '\\substack', insert: '\\substack{$ \\\\ }', preview: '\\sum_{\\substack{i < j}}', detail: 'stacked subscript', structure: true, keywords: ['stack', 'subscript', 'under'] },
   { name: '\\label', insert: '\\label{$}', preview: '\\text{label}', detail: 'anchor for \\ref' },
   { name: '\\quad', detail: 'wide space' },
   { name: '\\qquad', detail: 'wider space' },
@@ -168,6 +183,53 @@ export function completionQuery(
   // "alpha", not a macro, so don't offer to complete it.
   if (i >= 2 && value[i - 2] === '\\') return null
   return { from: i - 1, word: value.slice(i - 1, caret) }
+}
+
+/** How many letters a bare word needs before it is treated as a search. */
+const STRUCTURE_MIN = 3
+
+/**
+ * A plain word before the caret, for suggesting multi-cell structures.
+ *
+ * `\` completion only helps someone who already knows the construction is
+ * spelled with a backslash and roughly how. Typing "matrix" or "piecewise" is
+ * what people actually do first, so a bare word is also a query — but only
+ * against the handful of structure entries, and only from three letters. Every
+ * other word in a formula is a variable or an operator name, and popping a list
+ * over those would fight the author on nearly every keystroke.
+ */
+export function structureQuery(
+  value: string,
+  caret: number
+): { from: number; word: string } | null {
+  let i = caret
+  while (i > 0 && /[a-zA-Z]/.test(value[i - 1])) i--
+  if (i > 0 && value[i - 1] === '\\') return null // that's a macro, not a word
+  const word = value.slice(i, caret)
+  if (word.length < STRUCTURE_MIN) return null
+  return { from: i, word }
+}
+
+/** Structure entries matching a bare word, by name or by keyword. */
+export function structuresFor(word: string, limit = COMPLETION_LIMIT): Completion[] {
+  const query = word.toLowerCase()
+  const scored: Array<{ completion: Completion; score: number }> = []
+  for (const entry of CATALOGUE) {
+    if (!entry.structure) continue
+    const terms = [entry.name.slice(1).toLowerCase(), ...(entry.keywords ?? [])]
+    let best = -1
+    for (const term of terms) {
+      if (term === query) best = Math.max(best, 100)
+      else if (term.startsWith(query)) best = Math.max(best, 60 - term.length)
+      else if (term.includes(query)) best = Math.max(best, 20 - term.length)
+    }
+    if (best < 0) continue
+    scored.push({ completion: toCompletion(entry, false), score: best })
+  }
+  return scored
+    .sort((a, b) => b.score - a.score || a.completion.name.length - b.completion.name.length)
+    .slice(0, limit)
+    .map((s) => s.completion)
 }
 
 function toCompletion(entry: Entry, fromPaper: boolean): Completion {

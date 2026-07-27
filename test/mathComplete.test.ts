@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest'
 import {
   applyCompletion,
   completionQuery,
-  completionsFor
+  completionsFor,
+  structureQuery,
+  structuresFor
 } from '@renderer/editor/wysiwyg/math-complete'
 
 // Completing on `\` is only useful if it fires exactly where a macro name is
@@ -87,5 +89,39 @@ describe('applying a completion', () => {
     const completion = completionsFor('\\alpha')[0]
     const result = applyCompletion('\\alp', 0, 4, completion)
     expect(result.caret).toBe(result.value.length)
+  })
+})
+
+describe('structure suggestions on a bare word', () => {
+  it('finds a matrix from the word people actually type', () => {
+    const names = structuresFor('matrix').map((c) => c.name)
+    expect(names).toContain('\\pmatrix')
+    expect(names).toContain('\\bmatrix')
+  })
+
+  it('matches a keyword the name never mentions', () => {
+    expect(structuresFor('piecewise').map((c) => c.name)).toContain('\\cases')
+    expect(structuresFor('determinant').map((c) => c.name)).toContain('\\vmatrix')
+  })
+
+  it('offers only structures, never plain symbols', () => {
+    // `alpha` contains "alph" and would score under the macro matcher; the
+    // structure list is a different question and shouldn't answer it.
+    expect(structuresFor('alpha')).toEqual([])
+  })
+
+  it('waits for three letters before treating a word as a query', () => {
+    expect(structureQuery('ab', 2)).toBeNull()
+    expect(structureQuery('abc', 3)).toEqual({ from: 0, word: 'abc' })
+  })
+
+  it('leaves a macro to the macro matcher', () => {
+    // `\matrix` is a backslash query, and answering it here as well would
+    // show the list twice over with two different rankings.
+    expect(structureQuery('\\matrix', 7)).toBeNull()
+  })
+
+  it('reads only the word the caret is in', () => {
+    expect(structureQuery('x + matrix', 10)).toEqual({ from: 4, word: 'matrix' })
   })
 })

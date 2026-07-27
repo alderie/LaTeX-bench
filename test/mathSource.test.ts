@@ -4,6 +4,8 @@ import {
   addRow,
   cellSpans,
   errorOffset,
+  fromCells,
+  gridRegion,
   nextCell,
   parseMathShell,
   presentBody,
@@ -13,6 +15,7 @@ import {
   splitRows,
   switchEnvironment,
   tidyErrorMessage,
+  toCells,
   withLabelText
 } from '@renderer/editor/wysiwyg/math-source'
 
@@ -190,5 +193,51 @@ describe('KaTeX error messages', () => {
 
   it('survives a message with no position at all', () => {
     expect(errorOffset('KaTeX parse error: something went wrong')).toBeNull()
+  })
+})
+
+describe('the grid as cells', () => {
+  // `\\` is a row break; in a JS string literal that is four backslashes.
+  const ROWS = 'a & b \\\\\nc & d'
+
+  it('finds the region inside a lone matrix environment', () => {
+    const body = '\\begin{pmatrix}\n  a & b \\\\\n  c & d\n\\end{pmatrix}'
+    const shell = parseMathShell(`\\[\n${body}\n\\]`)
+    const region = gridRegion(shell, body)
+    expect(region?.env).toBe('pmatrix')
+    expect(body.slice(region!.from, region!.to).trim()).toBe('a & b \\\\\n  c & d')
+  })
+
+  it('treats the whole body as the grid when the environment is one', () => {
+    const shell = parseMathShell('\\begin{align}\n  a &= b\n\\end{align}')
+    const region = gridRegion(shell, 'a &= b')
+    // The empty name is what tells the editor this is an `align`, not a matrix.
+    expect(region).toEqual({ from: 0, to: 'a &= b'.length, env: '' })
+  })
+
+  it('refuses a matrix buried in a larger expression', () => {
+    // There is no honest way to draw `A = …` as a table, so the source view
+    // stays; offering cells here would hide the `A =`.
+    const body = 'A = \\begin{pmatrix} a & b \\end{pmatrix}'
+    expect(gridRegion(parseMathShell(`\\[${body}\\]`), body)).toBeNull()
+  })
+
+  it('squares off a ragged body so every row has the same width', () => {
+    expect(toCells('a & b \\\\\n c')).toEqual([
+      ['a', 'b'],
+      ['c', '']
+    ])
+  })
+
+  it('drops the empty row a trailing row break leaves behind', () => {
+    expect(toCells('a & b \\\\\n')).toEqual([['a', 'b']])
+  })
+
+  it('always yields one cell, so an empty grid still has something to click', () => {
+    expect(toCells('')).toEqual([['']])
+  })
+
+  it('round-trips a grid through cells', () => {
+    expect(fromCells(toCells(ROWS))).toBe(ROWS)
   })
 })

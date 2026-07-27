@@ -57,6 +57,20 @@
   --paper-body-size: 18px;
   --paper-margin-y: 96px;
 
+  /* The one hue in an otherwise monochrome palette: it marks "you are
+     editing maths, not prose". Nothing else in the app uses it, which is
+     the point — the ring around an inline formula is unmistakable. */
+  --math-edit: #4f46e5;
+  --math-edit-soft: rgba(79, 70, 229, 0.1);
+  --math-edit-ring: rgba(79, 70, 229, 0.25);
+
+  /* References — citations and cross-refs. One hue for "this points
+     somewhere else in the paper", distinct from the maths hue so a chip's
+     colour alone says which kind of thing it is. */
+  --ref-color: #0f766e;
+  --ref-soft: rgba(15, 118, 110, 0.1);
+  --ref-border: rgba(15, 118, 110, 0.28);
+
   /* Status colors */
   --status-ok: #16a34a;
   --status-warn: #d97706;
@@ -87,6 +101,14 @@
 
   --paper-bg: #1c1c1e;
   --paper-text: #e8e8ea;
+
+  --math-edit: #a5b4fc;
+  --math-edit-soft: rgba(129, 140, 248, 0.16);
+  --math-edit-ring: rgba(129, 140, 248, 0.32);
+
+  --ref-color: #5eead4;
+  --ref-soft: rgba(94, 234, 212, 0.14);
+  --ref-border: rgba(94, 234, 212, 0.3);
 }
 
 * {

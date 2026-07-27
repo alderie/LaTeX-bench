@@ -30,6 +30,20 @@ function press(el: Element, key: string, init: KeyboardEventInit = {}): void {
   el.dispatchEvent(new window.KeyboardEvent('keydown', { key, bubbles: true, ...init }))
 }
 
+/** Open the custom environment list and click an option, as a pointer would. */
+function chooseEnv(editor: FormulaEditor, value: string): void {
+  const down = (): MouseEvent =>
+    new window.MouseEvent('mousedown', { bubbles: true, cancelable: true })
+  const button = editor.dom.querySelector('.ui-dropdown__button') as HTMLButtonElement
+  button.dispatchEvent(down())
+  // Matched in JS rather than by attribute selector: the values include `\[`,
+  // and jsdom's global has no CSS.escape to make that safe to interpolate.
+  const option = [...editor.dom.querySelectorAll('.ui-dropdown__option')].find(
+    (row) => (row as HTMLElement).dataset.value === value
+  ) as HTMLElement
+  option.dispatchEvent(down())
+}
+
 describe('formula editor', () => {
   beforeEach(() => {
     document.body.replaceChildren()
@@ -72,9 +86,7 @@ describe('formula editor', () => {
 
   it('unnumbers an equation from the dropdown, not by retyping', () => {
     const { editor, field, commit } = open()
-    const select = editor.dom.querySelector('.formula-editor__env') as HTMLSelectElement
-    select.value = 'equation*'
-    select.dispatchEvent(new window.Event('change'))
+    chooseEnv(editor, 'equation*')
     press(field, 'Enter', { metaKey: true })
 
     const [source] = commit.mock.calls[0]

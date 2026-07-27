@@ -174,6 +174,19 @@ export function anchorFor(key: string): string {
   return `latex-anchor-${key.replace(/[^a-zA-Z0-9_-]/g, '-')}`
 }
 
+/**
+ * Anchors for bibliography entries live in their own namespace.
+ *
+ * `\label` keys and `\bibitem` keys are separate spaces in LaTeX — nothing
+ * stops a paper from having both `\label{tsallis2019}` and
+ * `\bibitem{tsallis2019}` — but they were sharing one `latex-anchor-…` id
+ * space here, and `getElementById` returns whichever comes first in the
+ * document. A citation would then scroll to a theorem.
+ */
+export function citeAnchorFor(key: string): string {
+  return `latex-cite-${key.replace(/[^a-zA-Z0-9_-]/g, '-')}`
+}
+
 function registerLabel(
   ctx: BuildContext,
   key: string | null | undefined,
@@ -485,7 +498,7 @@ function walkBibitem(ctx: BuildContext, node: PMNode): void {
   ctx.citations.set(key, {
     number,
     shortLabel,
-    domAnchor: anchorFor(key)
+    domAnchor: citeAnchorFor(key)
   })
 }
 

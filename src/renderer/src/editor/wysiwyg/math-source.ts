@@ -45,16 +45,25 @@ export interface MathShell {
  * the author can still edit the body, they just don't get a switcher that
  * would mangle an environment we don't understand the arity of.
  */
-export const ENV_CHOICES: Array<{ value: string; label: string }> = [
-  { value: '\\[', label: 'Display' },
-  { value: 'equation', label: 'Equation (numbered)' },
-  { value: 'equation*', label: 'Equation' },
-  { value: 'align', label: 'Align (numbered)' },
-  { value: 'align*', label: 'Align' },
-  { value: 'gather', label: 'Gather (numbered)' },
-  { value: 'gather*', label: 'Gather' },
-  { value: 'multline', label: 'Multline (numbered)' },
-  { value: 'multline*', label: 'Multline' }
+// `icon` names a glyph in `wysiwyg/icons`; `hint` carries the numbered/not
+// distinction so the label can stay the environment's plain name instead of
+// "Equation (numbered)". Both are inert data here — this module still does no
+// DOM work, and the dropdown is what turns them into a row.
+export const ENV_CHOICES: Array<{
+  value: string
+  label: string
+  icon: string
+  hint?: string
+}> = [
+  { value: '\\[', label: 'Display', icon: 'displayEnv' },
+  { value: 'equation', label: 'Equation', icon: 'equal', hint: 'numbered' },
+  { value: 'equation*', label: 'Equation', icon: 'equal' },
+  { value: 'align', label: 'Align', icon: 'alignEnv', hint: 'numbered' },
+  { value: 'align*', label: 'Align', icon: 'alignEnv' },
+  { value: 'gather', label: 'Gather', icon: 'gatherEnv', hint: 'numbered' },
+  { value: 'gather*', label: 'Gather', icon: 'gatherEnv' },
+  { value: 'multline', label: 'Multline', icon: 'multlineEnv', hint: 'numbered' },
+  { value: 'multline*', label: 'Multline', icon: 'multlineEnv' }
 ]
 
 const SWITCHABLE = new Set(ENV_CHOICES.map((c) => c.value))
@@ -481,6 +490,66 @@ export function gridSize(body: string): { rows: number; columns: number } {
 export function isGridBody(shell: MathShell, body = shell.body): boolean {
   if (shell.kind === 'env' && GRID_ENVIRONMENTS.has(shell.env)) return true
   return /\\begin\{[a-zA-Z]*matrix\*?\}|\\begin\{(cases|array|aligned|split)\}/.test(body)
+}
+
+// ── The grid as cells ──────────────────────────────────────────────────
+
+/**
+ * The span of the body that can be edited cell-by-cell, if there is one.
+ *
+ * Two cases qualify. Either the formula's own environment is a grid, so the
+ * whole body is the table (`align`, `gather`); or the body is nothing but one
+ * matrix-ish environment, in which case the editable part is what sits between
+ * its `\begin` and `\end`. A matrix buried inside a larger expression is
+ * deliberately excluded — there is no honest way to show `A = \begin{pmatrix}…`
+ * as a table without hiding the `A =`.
+ */
+export interface GridRegion {
+  from: number
+  to: number
+  /** Environment name, or '' when the shell itself is the grid. */
+  env: string
+}
+
+// Grouped so the prefix's own length gives the body's offset — searching for
+// the body text inside the match would misfire whenever the body is empty.
+const LONE_GRID_RE =
+  /^(\s*\\begin\{([a-zA-Z]+)(\*?)\}((?:[ \t]*(?:\[[^\]]*\]|\{[^}]*\}))*))([\s\S]*?)\\end\{\2\*?\}\s*$/
+
+export function gridRegion(shell: MathShell, body: string): GridRegion | null {
+  const lone = LONE_GRID_RE.exec(body)
+  if (lone && GRID_ENVIRONMENTS.has(lone[2])) {
+    const from = lone[1].length
+    return { from, to: from + lone[5].length, env: lone[2] }
+  }
+  if (shell.kind === 'env' && GRID_ENVIRONMENTS.has(shell.env)) {
+    return { from: 0, to: body.length, env: '' }
+  }
+  return null
+}
+
+/**
+ * A grid body as a rectangle of cell texts.
+ *
+ * Short rows are padded so the caller can index `cells[row][column]` without
+ * checking, and a body that is entirely blank still yields one empty cell —
+ * an editor with nothing to click would be a dead end.
+ */
+export function toCells(body: string): string[][] {
+  const rows = splitRows(body).map((row) => splitCells(row).map((cell) => cell.trim()))
+  // A trailing `\\` leaves an empty final row that is punctuation, not content.
+  while (rows.length > 1 && rows[rows.length - 1].every((cell) => cell === '')) rows.pop()
+  const width = Math.max(1, ...rows.map((row) => row.length))
+  return rows.map((row) => {
+    const padded = row.slice()
+    while (padded.length < width) padded.push('')
+    return padded
+  })
+}
+
+/** Serialize a rectangle of cells back into a grid body. */
+export function fromCells(cells: string[][]): string {
+  return cells.map((row) => row.map((cell) => cell.trim()).join(' & ')).join(' \\\\\n')
 }
 
 // ── Errors ─────────────────────────────────────────────────────────────

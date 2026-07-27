@@ -11,6 +11,21 @@
 const FLASH_MS = 1200
 
 /**
+ * The element carrying `anchorId`, preferring one inside the paper.
+ *
+ * `getElementById` returns the first match in the whole app, which is the
+ * wrong scope: anything else that mirrors document structure (an outline, a
+ * second view of the same paper) would win on document order and the jump
+ * would land outside the text.
+ */
+function findAnchor(anchorId: string): HTMLElement | null {
+  const paper = document.querySelector('.wysiwyg-editor')
+  const inPaper = paper?.querySelector(`[id="${anchorId.replace(/"/g, '\\"')}"]`)
+  if (inPaper) return inPaper as HTMLElement
+  return document.getElementById(anchorId)
+}
+
+/**
  * Scroll the element with `anchorId` into view and flash it.
  *
  * Returns false when nothing on the page carries that id — a reference to a
@@ -18,7 +33,7 @@ const FLASH_MS = 1200
  * doing nothing.
  */
 export function jumpToAnchor(anchorId: string): boolean {
-  const target = document.getElementById(anchorId)
+  const target = findAnchor(anchorId)
   if (!target) return false
 
   target.scrollIntoView({ behavior: 'smooth', block: 'center' })

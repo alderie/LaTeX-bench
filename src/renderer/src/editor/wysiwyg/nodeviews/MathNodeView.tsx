@@ -111,6 +111,19 @@ class MathView implements NodeView {
     this.dom.classList.remove('math-block--editing', 'math-inline--editing')
 
     const pos = this.getPos()
+
+    // An inline formula with no source renders to nothing — a zero-width node
+    // the author can neither see nor click, but which still has to be
+    // arrowed past. Emptying one is how you say "never mind", and so is
+    // escaping straight out of the empty one `/inline math` just inserted,
+    // which is why the cancel path (`latex === null`) is checked too.
+    const resulting = latex ?? ((this.node.attrs.latex as string) ?? '')
+    if (!this.displayMode && resulting.trim() === '' && typeof pos === 'number') {
+      this.view.dispatch(this.view.state.tr.delete(pos, pos + this.node.nodeSize))
+      this.view.focus()
+      return
+    }
+
     if (latex !== null && typeof pos === 'number' && latex !== this.node.attrs.latex) {
       this.view.dispatch(
         this.view.state.tr.setNodeMarkup(pos, undefined, { ...this.node.attrs, latex })

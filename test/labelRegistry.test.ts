@@ -102,6 +102,30 @@ We cite \\citep{smith2020,jones2021} and \\citet{doe2019}.
     expect(labelRegistry.getCitation('jones2021')!.shortLabel).toContain('2021')
     expect(labelRegistry.getCitation('doe2019')!.shortLabel).toContain('et al.')
   })
+
+  it('keeps bibitem anchors out of the \\label anchor namespace', async () => {
+    // A theorem and a bibliography entry are allowed to share a name in
+    // LaTeX. When both minted `latex-anchor-smith2020`, clicking the
+    // citation scrolled to the theorem — whichever came first in the DOM.
+    const { doc } = await parseLatexToDoc(`\\documentclass{article}
+\\begin{document}
+\\begin{theorem}\\label{smith2020}
+A statement.
+\\end{theorem}
+We cite \\citep{smith2020}.
+\\begin{thebibliography}{99}
+\\bibitem{smith2020} Smith, J. (2020). Title A.
+\\end{thebibliography}
+\\end{document}
+`)
+    labelRegistry.rebuild(doc)
+    const label = labelRegistry.getLabel('smith2020')
+    const cite = labelRegistry.getCitation('smith2020')
+    expect(label).toBeDefined()
+    expect(cite).toBeDefined()
+    expect(cite!.domAnchor).not.toBe(label!.domAnchor)
+    expect(cite!.domAnchor).toBe('latex-cite-smith2020')
+  })
 })
 
 describe('labelRegistry — floats and appendix', () => {

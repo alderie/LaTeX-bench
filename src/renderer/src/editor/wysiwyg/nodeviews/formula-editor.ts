@@ -5,6 +5,7 @@ import {
   cellSpans,
   ENV_CHOICES,
   errorOffset,
+  gridRegion,
   isGridBody,
   nextCell,
   parseMathShell,
@@ -16,9 +17,18 @@ import {
   withLabelText,
   type MathShell
 } from '../math-source'
-import { completionQuery, completionsFor, applyCompletion, type Completion } from '../math-complete'
+import {
+  applyCompletion,
+  completionQuery,
+  completionsFor,
+  structureQuery,
+  structuresFor,
+  type Completion
+} from '../math-complete'
 import { getMathMacros } from '../math-macros'
 import { createIcon } from '../icons'
+import { createDropdown, type Dropdown } from '../dropdown'
+import { MatrixGrid } from './matrix-grid'
 
 // The formula editing surface.
 //
@@ -62,6 +72,20 @@ export class FormulaEditor {
   private preview: HTMLElement | null = null
   private completions: CompletionPopup | null = null
   private gridControls: HTMLElement | null = null
+  private envDropdown: Dropdown | null = null
+  private gridHost: HTMLElement | null = null
+  private grid: MatrixGrid | null = null
+  private sourceToggle: HTMLButtonElement | null = null
+  /**
+   * Whether to edit a grid as cells rather than as LaTeX.
+   *
+   * Defaults on for a matrix and off for `align`, even though both are grids.
+   * A matrix is a table of short entries and reads as one; an `align` is a
+   * derivation whose rows are long, and chopping those into fixed-width
+   * inputs would be a worse text area, not a better table. The toggle in the
+   * bar overrides either way.
+   */
+  private preferGrid = true
   private readonly original: string
   private readonly initialBody: string
   private readonly initialChoice: string | null
@@ -80,15 +104,22 @@ export class FormulaEditor {
     this.dom.className = options.displayMode ? 'formula-editor' : 'formula-editor--inline'
 
     this.field = options.displayMode ? this.buildTextarea() : this.buildInput()
+    // `env !== ''` is "the body is a matrix", as opposed to "the formula's own
+    // environment happens to be a grid" — see `preferGrid`.
+    this.preferGrid = (gridRegion(this.shell, this.field.value)?.env ?? '') !== ''
 
     if (options.displayMode) {
       this.dom.appendChild(this.buildBar())
+      this.gridHost = document.createElement('div')
+      this.gridHost.className = 'formula-editor__grid-host'
+      this.dom.appendChild(this.gridHost)
       this.dom.appendChild(this.field)
       this.preview = document.createElement('div')
       this.preview.className = 'math-preview'
       this.dom.appendChild(this.preview)
       this.paint()
       this.updateGridControls()
+      this.updateSurface()
     } else {
       this.dom.appendChild(this.field)
     }
@@ -96,10 +127,21 @@ export class FormulaEditor {
     this.completions = new CompletionPopup((completion) => this.accept(completion))
     this.field.addEventListener('input', () => this.onInput())
     this.field.addEventListener('keydown', (event) => this.onKeyDown(event as KeyboardEvent))
-    this.field.addEventListener('blur', () => this.onBlur())
+    // On the subtree rather than the field: the grid's cells, the label and
+    // the environment list are all part of "still editing this formula", and
+    // a per-field blur handler would have to enumerate them.
+    this.dom.addEventListener('focusout', () => this.onBlur())
+    // Escape and ⌘⏎ have to work from a grid cell too, and those inputs are
+    // built by MatrixGrid, which knows nothing about committing a formula.
+    this.dom.addEventListener('keydown', (event) => this.onHostKeyDown(event))
   }
 
   focus(): void {
+    if (this.grid && this.gridHost && !this.gridHost.hidden) {
+      const grid = this.grid
+      requestAnimationFrame(() => grid.focus())
+      return
+    }
     const el = this.field
     requestAnimationFrame(() => {
       el.focus()
@@ -121,6 +163,10 @@ export class FormulaEditor {
   destroy(): void {
     this.completions?.destroy()
     this.completions = null
+    this.envDropdown?.destroy()
+    this.envDropdown = null
+    this.grid?.destroy()
+    this.grid = null
   }
 
   // ── Chrome ───────────────────────────────────────────────────────────
@@ -131,24 +177,19 @@ export class FormulaEditor {
 
     const choice = shellChoice(this.shell)
     if (choice !== null) {
-      const select = document.createElement('select')
-      select.className = 'formula-editor__env'
-      select.title = 'Environment'
-      for (const option of ENV_CHOICES) {
-        const el = document.createElement('option')
-        el.value = option.value
-        el.textContent = option.label
-        select.appendChild(el)
-      }
-      select.value = choice
-      // `change`, not `input`: switching environment can rewrite the body,
-      // and doing that while the author is still arrowing through the list
-      // would rewrite it once per keypress.
-      select.addEventListener('change', () => this.switchEnv(select.value))
-      // The select steals focus from the field; putting it back keeps the
-      // caret where it was so the author can carry on typing.
-      select.addEventListener('mousedown', (e) => e.stopPropagation())
-      bar.appendChild(select)
+      // A custom list rather than a native `<select>`: the OS popup can't
+      // carry the shape glyphs, and it renders in the system's colours rather
+      // than the editor's. `onChange` fires on commit, not on arrow-through —
+      // switching environment rewrites the body, and doing that once per
+      // keypress while the author scans the list would be destructive.
+      this.envDropdown = createDropdown({
+        options: ENV_CHOICES,
+        value: choice,
+        className: 'formula-editor__env',
+        title: 'Environment',
+        onChange: (value) => this.switchEnv(value)
+      })
+      bar.appendChild(this.envDropdown.dom)
     } else if (this.shell.kind === 'env') {
       const name = document.createElement('span')
       name.className = 'formula-editor__env-name'
@@ -170,6 +211,17 @@ export class FormulaEditor {
     )
     bar.appendChild(this.gridControls)
 
+    // Only appears when there is a grid to switch away from — the cells view
+    // is the default for a matrix, and this is the way back to the source for
+    // anything the table can't express (a `\multicolumn`, a stray `\hline`).
+    this.sourceToggle = iconButton('code', 'Edit as LaTeX', () => {
+      this.preferGrid = !this.preferGrid
+      this.updateSurface()
+      this.focus()
+    })
+    this.sourceToggle.hidden = true
+    bar.appendChild(this.sourceToggle)
+
     const spacer = document.createElement('span')
     spacer.className = 'formula-editor__spacer'
     bar.appendChild(spacer)
@@ -187,24 +239,43 @@ export class FormulaEditor {
     return this.shell.kind === 'env' && !this.shell.starred
   }
 
+  /**
+   * The label field. It reads as a filled field with its own caption rather
+   * than as another icon button, because it is the only control in the bar
+   * that takes typing — and an empty one is the difference between an equation
+   * you can cross-reference and one you can't.
+   */
   private buildLabelField(): HTMLElement {
     const wrap = document.createElement('label')
     wrap.className = 'formula-editor__label'
     wrap.appendChild(createIcon('tag', 12))
 
+    const caption = document.createElement('span')
+    caption.className = 'formula-editor__label-caption'
+    caption.textContent = 'label'
+    wrap.appendChild(caption)
+
     const input = document.createElement('input')
     input.type = 'text'
     input.value = this.shell.label ?? ''
-    input.placeholder = 'label'
+    input.placeholder = 'eq:name'
     input.spellcheck = false
     input.className = 'formula-editor__label-input'
     input.title = 'Reference name for \\ref and \\cref'
+    const reflect = (): void => {
+      wrap.classList.toggle('formula-editor__label--set', input.value.trim() !== '')
+    }
+    reflect()
     input.addEventListener('input', () => {
       this.shell = withLabelText(this.shell, input.value)
+      reflect()
     })
     input.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' || event.key === 'Escape') {
         event.preventDefault()
+        // Escape here dismisses the field, not the formula, so keep it from
+        // reaching the subtree handler that would revert the whole edit.
+        event.stopPropagation()
         this.field.focus()
       }
     })
@@ -228,6 +299,7 @@ export class FormulaEditor {
     el.type = 'text'
     el.className = 'math-inline__editor'
     el.value = this.original
+    el.placeholder = 'x^2'
     el.spellcheck = false
     el.autocomplete = 'off'
     return el
@@ -240,9 +312,89 @@ export class FormulaEditor {
     this.shell = result.shell
     this.field.value = result.body
     if (this.field instanceof HTMLTextAreaElement) autosize(this.field)
-    this.field.focus()
     this.schedulePaint()
     this.updateGridControls()
+    // `align` is a grid and `equation` isn't, so the surface itself changes.
+    this.updateSurface()
+    this.focus()
+  }
+
+  // ── The cells view ───────────────────────────────────────────────────
+
+  /**
+   * Show the grid when the formula has one and the author hasn't asked for the
+   * source, and the text area otherwise. Called after anything that can change
+   * whether a grid exists: typing, switching environment, toggling the view.
+   */
+  private updateSurface(): void {
+    const host = this.gridHost
+    if (!host) return
+    const region = gridRegion(this.shell, this.field.value)
+    const showGrid = region !== null && this.preferGrid
+
+    if (this.sourceToggle) {
+      this.sourceToggle.hidden = region === null
+      this.sourceToggle.title = showGrid ? 'Edit as LaTeX' : 'Edit as a grid'
+      this.sourceToggle.setAttribute('aria-label', this.sourceToggle.title)
+      this.sourceToggle.classList.toggle('formula-editor__button--on', !showGrid)
+    }
+    // The row/column buttons are the source view's way to grow a grid; the
+    // cells view grows by typing into the dashed edge, so they'd be noise.
+    this.gridControls?.classList.toggle('formula-editor__grid--hidden', showGrid)
+
+    host.hidden = !showGrid
+    this.field.classList.toggle('math-block__editor--hidden', showGrid)
+    if (!showGrid) {
+      this.grid?.destroy()
+      this.grid = null
+      return
+    }
+
+    const body = this.field.value.slice(region!.from, region!.to)
+    if (this.grid) {
+      this.grid.setBody(body)
+      return
+    }
+    this.grid = new MatrixGrid({ body, onChange: (next) => this.writeGrid(next) })
+    host.replaceChildren(this.grid.dom)
+  }
+
+  /** Splice a body the grid rewrote back into the region it came from. */
+  private writeGrid(gridBody: string): void {
+    const region = gridRegion(this.shell, this.field.value)
+    if (!region) return
+    const value = this.field.value
+    // A grid that is the whole body sits where it is; one inside a `\begin`
+    // keeps the wrapper on its own lines, which is how it was written and how
+    // the source view will show it if the author switches back.
+    const text =
+      region.env === ''
+        ? gridBody
+        : `\n${gridBody
+            .split('\n')
+            .map((line) => `  ${line}`)
+            .join('\n')}\n`
+    this.field.value = value.slice(0, region.from) + text + value.slice(region.to)
+    if (this.field instanceof HTMLTextAreaElement) autosize(this.field)
+    this.schedulePaint()
+  }
+
+  /**
+   * Finish keys, for focus that lives in a cell. The text area has its own
+   * handler, so skip anything originating there to avoid running twice.
+   */
+  private onHostKeyDown(event: KeyboardEvent): void {
+    if (event.target === this.field) return
+    if (!this.gridHost?.contains(event.target as Node)) return
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      this.finish(false)
+      return
+    }
+    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault()
+      this.finish(true)
+    }
   }
 
   /** Run a body transform, then put the caret in the cell it created. */
@@ -262,6 +414,7 @@ export class FormulaEditor {
     this.schedulePaint()
     this.updateCompletions()
     this.updateGridControls()
+    this.updateSurface()
   }
 
   private updateGridControls(): void {
@@ -272,25 +425,42 @@ export class FormulaEditor {
     )
   }
 
+  /**
+   * What to suggest under the caret.
+   *
+   * Two triggers, in order. A `\word` completes macros, as before. Failing
+   * that, a bare word of three letters or more is matched against the
+   * multi-cell constructions — typing "matrix" or "piecewise" is what someone
+   * reaches for before they remember it's spelled `\begin{pmatrix}`.
+   */
+  private currentQuery(): { from: number; word: string; items: Completion[] } | null {
+    const caret = this.field.selectionStart ?? this.field.value.length
+    const macro = completionQuery(this.field.value, caret)
+    if (macro) {
+      const items = completionsFor(macro.word, userMacroNames())
+      return items.length > 0 ? { ...macro, items } : null
+    }
+    const structure = structureQuery(this.field.value, caret)
+    if (structure) {
+      const items = structuresFor(structure.word)
+      return items.length > 0 ? { ...structure, items } : null
+    }
+    return null
+  }
+
   private updateCompletions(): void {
     if (!this.completions) return
-    const caret = this.field.selectionStart ?? this.field.value.length
-    const query = completionQuery(this.field.value, caret)
+    const query = this.currentQuery()
     if (!query) {
       this.completions.hide()
       return
     }
-    const items = completionsFor(query.word, userMacroNames())
-    if (items.length === 0) {
-      this.completions.hide()
-      return
-    }
-    this.completions.show(items, caretPoint(this.field))
+    this.completions.show(query.items, caretPoint(this.field))
   }
 
   private accept(completion: Completion): void {
     const caret = this.field.selectionStart ?? this.field.value.length
-    const query = completionQuery(this.field.value, caret)
+    const query = this.currentQuery()
     if (!query) return
     const result = applyCompletion(this.field.value, query.from, caret, completion)
     this.field.value = result.value

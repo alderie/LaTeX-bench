@@ -4,6 +4,7 @@ import type { Node as PMNode } from 'prosemirror-model'
 import type { EditorView, NodeView, NodeViewConstructor } from 'prosemirror-view'
 import { getEquationNumbersForPos, subscribe as subscribeRegistry } from '../labelRegistry'
 import { getMathMacros, injectEquationTags, stripMathWrappers } from '../math-macros'
+import { FormulaEditor } from './formula-editor'
 
 // Re-exported for the editor, which sets the table when a paper loads.
 export { setMathMacros, getMathMacros } from '../math-macros'
@@ -12,7 +13,7 @@ class MathView implements NodeView {
   dom: HTMLElement
   contentDOM?: HTMLElement
   private editing = false
-  private editor?: HTMLInputElement | HTMLTextAreaElement
+  private editor: FormulaEditor | null = null
   private unsubscribe: (() => void) | null = null
 
   constructor(
@@ -89,137 +90,34 @@ class MathView implements NodeView {
   private openEditor(): void {
     this.editing = true
     this.dom.replaceChildren()
-    // Inline math uses an <input> with field-sizing:content so it grows
-    // with the text and aligns to the surrounding baseline. Block math
-    // keeps a textarea (multi-line LaTeX), but loses the resize grip and
-    // browser-default chrome via CSS.
-    const el = this.displayMode
-      ? document.createElement('textarea')
-      : document.createElement('input')
-    el.className = this.displayMode ? 'math-block__editor' : 'math-inline__editor'
-    el.value = this.node.attrs.latex as string
-    el.spellcheck = false
-    el.autocomplete = 'off'
-    if (el instanceof HTMLInputElement) el.type = 'text'
-    if (el instanceof HTMLTextAreaElement) {
-      el.rows = Math.max(2, el.value.split('\n').length)
-      // Auto-grow as the user types; field-sizing:content also handles
-      // this in newer Chromium but rows-based fallback works everywhere.
-      const autosize = (): void => {
-        el.style.height = 'auto'
-        el.style.height = el.scrollHeight + 'px'
-      }
-      el.addEventListener('input', autosize)
-      requestAnimationFrame(autosize)
-    }
-    this.editor = el
-    this.dom.appendChild(el)
+    this.dom.classList.add(this.displayMode ? 'math-block--editing' : 'math-inline--editing')
 
-    // Live preview. Editing a formula blind — type LaTeX, blur, look, fix,
-    // re-open — is the slowest loop in the editor. Rendering as the author
-    // types collapses it to one pass. Block math gets the preview; inline
-    // math is small enough that the surrounding line is the preview.
-    let preview: HTMLElement | null = null
-    if (this.displayMode) {
-      preview = document.createElement('div')
-      preview.className = 'math-preview'
-      this.dom.appendChild(preview)
-      const paint = (): void => {
-        if (!preview) return
-        const source = stripMathWrappers(el.value).trim()
-        preview.classList.remove('math-preview--error')
-        if (source === '') {
-          preview.textContent = ''
-          return
-        }
-        try {
-          katex.render(source, preview, {
-            throwOnError: true,
-            displayMode: true,
-            strict: false,
-            macros: getMathMacros()
-          })
-        } catch (err) {
-          // KaTeX's message names the offending token, which is exactly
-          // what an author needs mid-formula.
-          preview.classList.add('math-preview--error')
-          preview.textContent = (err as Error).message
-        }
-      }
-      // Coalesce to one render per frame: KaTeX on a large `align` is
-      // expensive enough that per-keystroke rendering stutters.
-      let queued = false
-      const schedulePaint = (): void => {
-        if (queued) return
-        queued = true
-        requestAnimationFrame(() => {
-          queued = false
-          paint()
-        })
-      }
-      el.addEventListener('input', schedulePaint)
-      paint()
-    }
-    requestAnimationFrame(() => {
-      el.focus()
-      // Place caret at end so the user is ready to extend the formula.
-      try {
-        const len = el.value.length
-        if (el instanceof HTMLInputElement) el.setSelectionRange(len, len)
-        else el.setSelectionRange(len, len)
-      } catch {
-        /* ignore */
-      }
+    const editor = new FormulaEditor({
+      latex: this.node.attrs.latex as string,
+      displayMode: this.displayMode,
+      onCommit: (latex) => this.closeEditor(latex),
+      onCancel: () => this.closeEditor(null)
     })
+    this.editor = editor
+    this.dom.appendChild(editor.dom)
+    editor.focus()
+  }
 
-    const commit = (): void => {
-      const next = el.value
-      this.editing = false
-      preview?.remove()
-      preview = null
-      const pos = this.getPos()
-      if (typeof pos === 'number' && next !== this.node.attrs.latex) {
-        const tr = this.view.state.tr.setNodeMarkup(pos, undefined, {
-          ...this.node.attrs,
-          latex: next
-        })
-        this.view.dispatch(tr)
-      } else {
-        this.render()
-      }
+  /** Leave editing mode, writing `latex` back to the node when it changed. */
+  private closeEditor(latex: string | null): void {
+    this.editing = false
+    this.editor?.destroy()
+    this.editor = null
+    this.dom.classList.remove('math-block--editing', 'math-inline--editing')
+
+    const pos = this.getPos()
+    if (latex !== null && typeof pos === 'number' && latex !== this.node.attrs.latex) {
+      this.view.dispatch(
+        this.view.state.tr.setNodeMarkup(pos, undefined, { ...this.node.attrs, latex })
+      )
+      return
     }
-
-    const cancel = (): void => {
-      this.editing = false
-      preview?.remove()
-      preview = null
-      this.render()
-    }
-
-    // The union type narrows addEventListener to the generic `Event`
-    // signature; cast through HTMLElement to recover KeyboardEvent typing.
-    const elAsEl = el as HTMLElement
-    elAsEl.addEventListener('blur', commit)
-    elAsEl.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        cancel()
-      } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault()
-        el.blur()
-      } else if (e.key === 'Enter' && !this.displayMode) {
-        e.preventDefault()
-        el.blur()
-      } else if (e.key === 'Tab' && this.displayMode) {
-        // Inside a matrix or align body, Tab means "next cell". Leaving the
-        // field is what a browser does by default and is never what the
-        // author wants here — the surrounding editor is one keystroke away
-        // via Escape.
-        e.preventDefault()
-        insertAtCursor(el as HTMLTextAreaElement, e.shiftKey ? ' \\\\\n  ' : ' & ')
-        el.dispatchEvent(new Event('input'))
-      }
-    })
+    this.render()
   }
 
   selectNode(): void {
@@ -239,20 +137,11 @@ class MathView implements NodeView {
   }
 
   destroy(): void {
-    this.editor = undefined
+    this.editor?.destroy()
+    this.editor = null
     this.unsubscribe?.()
     this.unsubscribe = null
   }
-}
-
-// Splice text at the caret of a textarea. Used by the Tab handler to move
-// between matrix / align cells.
-function insertAtCursor(el: HTMLTextAreaElement, text: string): void {
-  const start = el.selectionStart ?? el.value.length
-  const end = el.selectionEnd ?? start
-  el.value = el.value.slice(0, start) + text + el.value.slice(end)
-  const caret = start + text.length
-  el.setSelectionRange(caret, caret)
 }
 
 function stripWrappers(latex: string, displayMode: boolean): string {

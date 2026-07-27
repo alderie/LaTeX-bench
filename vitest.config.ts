@@ -14,6 +14,7 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'test/**/*.test.ts', 'test/**/*.test.tsx'],
+    setupFiles: ['test/setup.ts'],
     // unified-latex packages and prosemirror are ESM; vitest handles them
     // natively. No special inline config needed.
     globals: false

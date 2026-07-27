@@ -6,6 +6,7 @@ import { usePaperStore } from '../stores/paperStore'
 import { useLibraryStore } from '../stores/libraryStore'
 import { ViewModeToggle } from './ViewModeToggle'
 import { WindowControls } from './WindowControls'
+import { useInlineRename } from '../hooks/useInlineRename'
 
 export function MainHeader(): React.JSX.Element {
   const sidebarOpen = useUiStore((s) => s.sidebarOpen)
@@ -14,7 +15,14 @@ export function MainHeader(): React.JSX.Element {
   const paperId = usePaperStore((s) => s.paperId)
   const dirty = usePaperStore((s) => s.dirty)
   const papers = useLibraryStore((s) => s.papers)
+  const renamePaper = useLibraryStore((s) => s.renamePaper)
   const activePaper = papers.find((p) => p.id === paperId)
+
+  // The title in the header is the most obvious thing in the window to click
+  // when you want to rename the paper, so it is now the thing that does it.
+  const rename = useInlineRename(async (title) => {
+    if (paperId) await renamePaper(paperId, title)
+  })
 
   // "Saved" is worth a beat of attention and then nothing at all — the chip
   // confirms the write, then recedes to a hairline of text so it stops
@@ -42,7 +50,22 @@ export function MainHeader(): React.JSX.Element {
 
       {activePaper && (
         <>
-          <span className="main-header__paper">{activePaper.title}</span>
+          {rename.editing ? (
+            <input className="main-header__paper-input" {...rename.inputProps} />
+          ) : (
+            <span
+              className="main-header__paper"
+              title="Click to rename"
+              role="button"
+              tabIndex={0}
+              onClick={() => rename.start(activePaper.title)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === 'F2') rename.start(activePaper.title)
+              }}
+            >
+              {activePaper.title}
+            </span>
+          )}
           <span
             className={
               'save-indicator' +

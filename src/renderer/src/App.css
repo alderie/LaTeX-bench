@@ -65,11 +65,91 @@
 }
 
 .side-panel__heading {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--text-tertiary);
   font-weight: 600;
+}
+
+/* How many papers there are, without a row of its own. */
+.side-panel__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--overlay-hover);
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Filter ───────────────────────────────────────────────────────────
+   Appears once the list is long enough that scanning it stops working;
+   below that it would be a permanent reminder of a problem nobody has. */
+.side-panel__search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 8px 8px 8px;
+  padding: 0 8px;
+  height: 28px;
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-tertiary);
+  -webkit-app-region: no-drag;
+}
+.side-panel__search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+.side-panel__search input::placeholder {
+  color: var(--text-tertiary);
+}
+.side-panel__search-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.side-panel__search-clear:hover {
+  background: var(--overlay-hover);
+  color: var(--text-primary);
+}
+
+/* ── Recency groups ───────────────────────────────────────────────────
+   Gives the list a shape you can navigate by position instead of reading
+   every row's timestamp. */
+.side-panel__group + .side-panel__group {
+  margin-top: 10px;
+}
+.side-panel__group-heading {
+  padding: 4px 10px 4px 10px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-tertiary);
 }
 
 .side-panel__header-actions {
@@ -86,6 +166,7 @@
 }
 
 .side-panel__item {
+  position: relative;
   width: 100%;
   text-align: left;
   background: transparent;
@@ -93,22 +174,45 @@
   padding: 6px 10px;
   font-family: inherit;
   font-size: 13px;
-  color: var(--text-primary);
+  color: var(--text-secondary);
   display: flex;
   flex-direction: column;
   gap: 1px;
   cursor: pointer;
   border-radius: 6px;
   margin-bottom: 1px;
-  transition: background 0.12s ease;
+  transition: background 0.12s ease, color 0.12s ease;
 }
 
 .side-panel__item:hover {
   background: var(--overlay-hover);
+  color: var(--text-primary);
 }
 
+/* The open paper has to stay distinguishable while the pointer is over a
+   different row — sharing one background with `:hover` meant that the
+   moment you went looking for another paper, you lost track of which one
+   you were in. */
 .side-panel__item--active {
   background: var(--overlay-hover);
+  color: var(--text-primary);
+}
+.side-panel__item--active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 7px;
+  bottom: 7px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--text-primary);
+}
+.side-panel__item--active .side-panel__item-title {
+  font-weight: 550;
+}
+.side-panel__item:focus-visible {
+  outline: 2px solid var(--text-tertiary);
+  outline-offset: -2px;
 }
 
 .side-panel__item-row {
@@ -181,10 +285,29 @@
 }
 
 .side-panel__empty {
-  padding: 20px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 32px 16px;
   text-align: center;
   font-size: 12px;
   color: var(--text-tertiary);
+}
+/* An empty list should say what to do about it, not just that it's empty. */
+.side-panel__empty-action {
+  padding: 5px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.side-panel__empty-action:hover {
+  background: var(--overlay-hover);
+  color: var(--text-primary);
 }
 
 /* ── Main header ──────────────────────────────────────────────────── */
@@ -237,6 +360,36 @@
   overflow: hidden;
   text-overflow: ellipsis;
   line-height: 1;
+  /* The header is a window-drag region; without this the title swallows
+     the click and drags the window instead of opening the rename field. */
+  -webkit-app-region: no-drag;
+  padding: 4px 6px;
+  margin: -4px -6px;
+  border-radius: 5px;
+  cursor: text;
+}
+.main-header__paper:hover {
+  background: var(--overlay-hover);
+}
+
+.main-header__paper-input {
+  -webkit-app-region: no-drag;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  padding: 4px 6px;
+  margin: -4px -6px;
+  min-width: 12ch;
+  max-width: 40ch;
+  outline: none;
+}
+.main-header__paper-input:focus {
+  border-color: var(--text-tertiary);
 }
 
 /* Saved/saving chip — matches the rounding and height of icon-buttons
@@ -638,9 +791,8 @@
 }
 .slash-menu__item {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
+  align-items: center;
+  gap: 10px;
   padding: 6px 8px;
   border-radius: 5px;
   cursor: pointer;
@@ -649,7 +801,25 @@
 .slash-menu__item--active {
   background: var(--overlay-hover);
 }
+/* The glyph carries a light box so the column reads as a column even when
+   the icons themselves are different widths. */
+.slash-menu__icon {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+}
+.slash-menu__item--active .slash-menu__icon {
+  color: var(--text-primary);
+}
 .slash-menu__title {
+  flex: 1;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -678,6 +848,178 @@
   font-size: 11px;
   color: var(--status-error);
   white-space: pre-wrap;
+}
+.math-preview__jump {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  opacity: 0.8;
+}
+.math-preview__jump:hover {
+  opacity: 1;
+}
+
+/* ── Formula editor ──────────────────────────────────────────────────
+   Opened in place of a rendered display. The bar above the text area
+   holds the parts of a formula that aren't maths — which environment it
+   is, what it's labelled, how big the grid is — so the text area holds
+   only the maths. */
+.formula-editor {
+  display: block;
+  text-align: left;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  overflow: hidden;
+}
+.formula-editor__bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.formula-editor__spacer {
+  flex: 1;
+}
+.formula-editor__env {
+  height: 22px;
+  padding: 0 4px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.formula-editor__env-name {
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+}
+.formula-editor__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 22px;
+  padding: 0 5px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-tertiary);
+}
+.formula-editor__label-input {
+  width: 12ch;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.formula-editor__grid {
+  display: inline-flex;
+  gap: 2px;
+}
+/* Row/column controls mean nothing outside a grid, but hiding them
+   entirely makes the bar jump every time a matrix is typed or deleted. */
+.formula-editor__grid--off {
+  opacity: 0.3;
+  pointer-events: none;
+}
+.formula-editor__button {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  height: 22px;
+  padding: 0 5px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.formula-editor__button:hover {
+  background: var(--overlay-hover);
+  color: var(--text-primary);
+}
+.formula-editor__hint {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+.formula-editor .math-block__editor {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.formula-editor .math-preview {
+  margin-top: 0;
+  border-top: 1px dashed var(--border-color);
+  background: var(--bg-secondary);
+}
+.formula-editor--inline {
+  display: inline;
+}
+
+/* ── Macro completion ────────────────────────────────────────────────
+   Anchored under the caret inside the formula editor. Each row renders
+   the macro it would insert: recognising `∇` is faster than reading
+   "nabla", and it settles which of two similarly-named macros is which. */
+.math-complete {
+  position: fixed;
+  z-index: 420;
+  min-width: 240px;
+  max-width: 340px;
+  padding: 4px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  font-family: var(--font-sans);
+  font-size: 12px;
+}
+.math-complete__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-primary);
+}
+.math-complete__item--active {
+  background: var(--overlay-hover);
+}
+.math-complete__sample {
+  flex-shrink: 0;
+  min-width: 30px;
+  text-align: center;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.math-complete__name {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.math-complete__detail {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--text-tertiary);
 }
 
 /* Structural markers — `\appendix`, `\tableofcontents`, page breaks.
@@ -811,6 +1153,20 @@
   border-radius: 4px;
 }
 .math-block:hover { background: var(--overlay-hover); }
+/* While the editor is open the block is a container, not a target: the
+   hover tint and the pointer cursor both belong to the closed state. */
+.math-block--editing,
+.math-block--editing:hover {
+  background: transparent;
+  cursor: default;
+  padding: 0;
+  text-align: left;
+}
+.math-inline--editing,
+.math-inline--editing:hover {
+  background: transparent;
+  cursor: default;
+}
 
 /* Inline math editor — looks like a flowing inline chip, no textarea
    chrome, baseline-aligned with surrounding prose. */

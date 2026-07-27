@@ -30,7 +30,14 @@
 // would be attributed to the wrong one. In that case nothing is marked and
 // the source area remains the way to edit the formula.
 
-import { gridCells, gridSpans, type GridCell, type MathShell } from '../math-source'
+import {
+  bodyIsGrid,
+  gridCells,
+  gridSpans,
+  previewDrawsTable,
+  type GridCell,
+  type MathShell
+} from '../math-source'
 import { markCell, type CellSite } from '../editors/cell-editor'
 
 /**
@@ -41,7 +48,12 @@ import { markCell, type CellSite } from '../editors/cell-editor'
  */
 export function markMathCells(host: HTMLElement, shell: MathShell, body: string): CellSite[] {
   const spans = gridSpans(shell, body)
-  const tables = host.querySelectorAll<HTMLElement>('.mtable')
+  // The preview's own wrapper is drawn as a table too when the formula is an
+  // `equation` — KaTeX builds one out of the same machinery as an `align` —
+  // and that table belongs to nothing in the body. It comes first, since it
+  // contains everything else.
+  const wrapper = previewDrawsTable(shell) && !bodyIsGrid(shell) ? 1 : 0
+  const tables = [...host.querySelectorAll<HTMLElement>('.mtable')].slice(wrapper)
   if (spans.length === 0 || tables.length !== spans.length) return []
 
   const found: Array<{ el: HTMLElement; cell: GridCell; grid: number }> = []

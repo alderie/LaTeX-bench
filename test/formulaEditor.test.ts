@@ -191,6 +191,21 @@ describe('formula editor', () => {
       field.dispatchEvent(new window.Event('input', { bubbles: true }))
     }
 
+    it('offers cells for a matrix inside a numbered equation', () => {
+      // The commonest wrapper there is. KaTeX draws `equation` as a table of
+      // its own, which the trace from a cell back to its source counted
+      // against the body's grids — so every matrix in one was uneditable
+      // while the same matrix in a `\[…\]` was fine.
+      const { editor, field } = open(
+        '\\begin{equation}\n  \\begin{pmatrix}\n    3 & \\\\\n    &\n  \\end{pmatrix}\n\\end{equation}'
+      )
+      const found = cells(editor)
+      expect(found).toHaveLength(4)
+      click(found[1])
+      type(cellField(editor), '7')
+      expect(field.value).toContain('3 & 7')
+    })
+
     it('offers a cell for every entry of a matrix inside a larger formula', () => {
       // A matrix with maths either side of it is the common case, and the
       // one the old separate grid view had nothing to say about.

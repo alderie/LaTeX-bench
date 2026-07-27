@@ -9,6 +9,8 @@ import {
   nextCell,
   parseMathShell,
   presentBody,
+  previewDrawsTable,
+  previewSource,
   rewriteGrid,
   serializeMathShell,
   shellChoice,
@@ -236,6 +238,50 @@ describe('the grids in a formula', () => {
     // later matrix in the formula trace back to the wrong source.
     const body = '\\sum_{\\substack{i < j \\\\ k}} x'
     expect(gridSpans(shellFor(body), body).map((span) => span.env)).toEqual(['substack'])
+  })
+})
+
+describe('what the preview renders', () => {
+  const preview = (source: string): string => {
+    const shell = parseMathShell(source)
+    return previewSource(shell, presentBody(shell))
+  }
+
+  it('takes the numbering off, since the numbers come from the document', () => {
+    expect(preview('\\begin{equation}\n  a = b\n\\end{equation}')).toContain('\\begin{equation*}')
+  })
+
+  it('keeps the environment, so an align previews as aligned rows', () => {
+    expect(preview('\\begin{align}\n  a &= b\n\\end{align}')).toContain('\\begin{align*}')
+  })
+
+  it('keeps the arguments of an environment that takes them', () => {
+    // `\begin{alignat*}` without its `{2}` is a parse error, and `array`
+    // without its column spec is not an `array`.
+    expect(preview('\\begin{alignat}{2}\n  a &= b\n\\end{alignat}')).toContain(
+      '\\begin{alignat*}{2}'
+    )
+    expect(preview('\\begin{array}{cc}\n  a & b\n\\end{array}')).toContain('\\begin{array}{cc}')
+  })
+
+  it('leaves an environment with no starred form unstarred', () => {
+    // `\begin{split*}` is not anything, and previewing it said so where the
+    // maths should have been.
+    expect(preview('\\begin{split}\n  a &= b\n\\end{split}')).toContain('\\begin{split}')
+  })
+
+  it('drops a wrapper KaTeX has never heard of rather than failing on it', () => {
+    // `multline` and a paper's own environments render as "No such
+    // environment"; the body inside is what the author is editing anyway.
+    expect(preview('\\begin{multline}\n  a = b\n\\end{multline}')).toBe('a = b')
+    expect(preview('\\begin{subequations}\n  a = b\n\\end{subequations}')).toBe('a = b')
+  })
+
+  it('says when its own wrapper is drawn as a table', () => {
+    // Which is how the cells in the rendering are traced back to the source.
+    expect(previewDrawsTable(parseMathShell('\\begin{equation}a\\end{equation}'))).toBe(true)
+    expect(previewDrawsTable(parseMathShell('\\[a\\]'))).toBe(false)
+    expect(previewDrawsTable(parseMathShell('\\begin{multline}a\\end{multline}'))).toBe(false)
   })
 })
 

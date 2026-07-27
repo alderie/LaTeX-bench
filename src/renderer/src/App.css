@@ -257,6 +257,15 @@
   font-variant-numeric: tabular-nums;
   user-select: none;
   flex-shrink: 0;
+  transition: background-color 0.6s ease, color 0.6s ease, opacity 0.6s ease;
+}
+/* A second or so after the write lands the chip stops announcing itself: the
+   fill drops away and the text dims to tertiary, leaving a quiet trace rather
+   than a badge parked next to the title. */
+.save-indicator--settled {
+  background: transparent;
+  color: var(--text-tertiary);
+  opacity: 0.65;
 }
 .save-indicator__spin {
   animation: save-indicator-spin 0.9s linear infinite;
@@ -318,8 +327,9 @@
   background: #f1707a;
   color: #ffffff;
 }
+/* Lucide glyphs — leave anti-aliasing on, the strokes are rounded. */
 .window-control svg {
-  shape-rendering: crispEdges;
+  shape-rendering: auto;
 }
 
 /* Icon button — matches task-app's side-panel-icon-btn / panel-toggle-open. */
@@ -1306,7 +1316,7 @@
   background: transparent;
   border: 0;
   height: 24px;
-  padding: 0 10px;
+  padding: 0 9px;
   border-radius: 4px;
   font: inherit;
   font-size: 11px;
@@ -1315,7 +1325,20 @@
   cursor: pointer;
   display: inline-flex;
   align-items: center;
+  gap: 5px;
   -webkit-app-region: no-drag;
+  transition: color 0.12s ease;
+}
+.view-mode-toggle__btn:hover {
+  color: var(--text-primary);
+}
+/* The glyph carries the mode; keep it a shade behind the label until the tab
+   is the active one, so the pair reads as one word rather than two marks. */
+.view-mode-toggle__btn svg {
+  opacity: 0.7;
+}
+.view-mode-toggle__btn--active svg {
+  opacity: 1;
 }
 
 .view-mode-toggle__btn--active {
@@ -1474,39 +1497,469 @@
 
 /* ── MCP indicator (floating bottom-right) ───────────────────────── */
 
-.mcp-indicator {
+/* Fixed anchor so the connect popover can hang off the pill instead of
+   floating free. Only the pill takes pointer events when closed. */
+.mcp-anchor {
   position: fixed;
   bottom: 14px;
   right: 18px;
+  z-index: 160;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  -webkit-app-region: no-drag;
+}
+
+/* Ambient, not a call to action: no fill, a hairline border and tertiary text,
+   so it sits under the paper's reading weight until you look for it. Squared
+   off (8px) to match the toolbars rather than reading as a floating capsule. */
+.mcp-indicator {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   font: inherit;
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 500;
-  color: var(--text-secondary);
-  padding: 6px 12px;
-  border-radius: 999px;
-  background: var(--bg-primary);
-  border: 1px solid var(--border-color);
-  box-shadow: var(--shadow-sm);
+  letter-spacing: 0.02em;
+  color: var(--text-tertiary);
+  padding: 5px 9px;
+  border-radius: 8px;
+  background: transparent;
+  border: 1px solid transparent;
   cursor: pointer;
-  z-index: 160;
-  -webkit-app-region: no-drag;
-  transition: right 0.3s cubic-bezier(0.4, 0, 0.2, 1), background 0.15s ease, color 0.15s ease, opacity 0.2s ease;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
 }
-.mcp-indicator:hover {
-  background: var(--bg-secondary);
+.mcp-indicator:hover,
+.mcp-indicator--open {
+  color: var(--text-secondary);
+  background: var(--bg-primary);
+  border-color: var(--border-color);
+}
+.mcp-indicator--open {
   color: var(--text-primary);
 }
+
 .mcp-indicator__dot {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
-  background: var(--text-tertiary);
+  background: currentColor;
+  opacity: 0.5;
 }
-.mcp-indicator--ok .mcp-indicator__dot { background: var(--status-ok); }
-.mcp-indicator--err .mcp-indicator__dot { background: var(--status-error); }
+.mcp-indicator--ok .mcp-indicator__dot {
+  background: var(--status-ok);
+  opacity: 1;
+}
+.mcp-indicator--err .mcp-indicator__dot {
+  background: var(--status-error);
+  opacity: 1;
+}
+
+/* Live agent count. Reads as a number attached to the label, not a alert. */
+.mcp-indicator__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  margin-left: 1px;
+  border-radius: 5px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 9.5px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.mcp-indicator--ok .mcp-indicator__badge {
+  background: color-mix(in srgb, var(--status-ok) 16%, transparent);
+  color: color-mix(in srgb, var(--status-ok) 80%, var(--text-primary));
+}
+
+/* Custom circular loader for the starting state: a static track with a sweeping
+   arc whose dash length breathes as the ring turns, so it reads as
+   indeterminate progress rather than an icon being spun. */
+.mcp-loader {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  overflow: visible;
+}
+.mcp-loader circle {
+  fill: none;
+  stroke-width: 2;
+}
+.mcp-loader__track {
+  stroke: var(--border-color);
+}
+.mcp-loader__arc {
+  stroke: var(--text-secondary);
+  stroke-linecap: round;
+  transform-origin: 50% 50%;
+  /* r=6 → circumference ≈ 37.7 */
+  stroke-dasharray: 4 34;
+  animation: mcp-loader-sweep 1.2s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+}
+@keyframes mcp-loader-sweep {
+  0% {
+    stroke-dasharray: 3 35;
+    transform: rotate(0deg);
+  }
+  50% {
+    stroke-dasharray: 22 16;
+    transform: rotate(310deg);
+  }
+  100% {
+    stroke-dasharray: 3 35;
+    transform: rotate(720deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mcp-loader__arc {
+    animation-duration: 2.4s;
+    animation-timing-function: linear;
+  }
+}
+
+/* ── "Connect an agent" popover ──────────────────────────────────── */
+
+.mcp-pop {
+  width: 400px;
+  max-height: min(60vh, 520px);
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 14px 16px 16px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgb(0 0 0 / 0.18);
+  animation: mcp-pop-rise 130ms ease;
+  text-align: left;
+}
+@keyframes mcp-pop-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.mcp-pop__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.mcp-pop__head-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+.mcp-pop__title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+}
+.mcp-pop__subtitle {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+.mcp-pop__head-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.mcp-pop__icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: color 0.12s ease, background-color 0.12s ease;
+}
+.mcp-pop__icon-btn:hover {
+  color: var(--text-primary);
+  background: var(--overlay-hover);
+}
+.mcp-pop__icon-btn.is-on {
+  color: var(--status-ok);
+}
+
+.mcp-pop__loading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 16px 2px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.mcp-pop__spinner {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 2px solid var(--border-color);
+  border-top-color: var(--text-secondary);
+  animation: mcp-spin 700ms linear infinite;
+}
+@keyframes mcp-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Rows sit directly on the popover surface, separated by hairlines, so the
+   list doesn't read as a box nested inside a box. */
+.mcp-pop__agents {
+  display: flex;
+  flex-direction: column;
+}
+.mcp-agent {
+  padding: 10px 0;
+  border-top: 1px solid var(--border-color);
+}
+.mcp-agent:first-child {
+  border-top: none;
+}
+.mcp-agent__main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.mcp-agent__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+.mcp-agent__text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+.mcp-agent__name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.mcp-agent__hint {
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Calm inline confirmation: a small check + label, no loud badge. */
+.mcp-agent--connected .mcp-agent__hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: color-mix(in srgb, var(--status-ok) 85%, var(--text-secondary));
+}
+.mcp-agent__check {
+  flex-shrink: 0;
+  color: var(--status-ok);
+}
+
+.mcp-agent__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 5px 11px;
+  border-radius: 7px;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease,
+    opacity 0.12s ease;
+}
+.mcp-agent__btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.mcp-agent__btn--primary {
+  background: var(--accent-color);
+  color: var(--bg-primary);
+}
+.mcp-agent__btn--primary:not(:disabled):hover {
+  background: var(--accent-hover);
+}
+/* Quiet by default; hover firms it up rather than shouting with a color. */
+.mcp-agent__btn--disconnect {
+  background: transparent;
+  border-color: var(--border-color);
+  color: var(--text-tertiary);
+}
+.mcp-agent__btn--disconnect:not(:disabled):hover {
+  color: var(--text-primary);
+  border-color: var(--text-tertiary);
+  background: var(--overlay-hover);
+}
+.mcp-agent__error {
+  margin: 7px 0 0;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--status-error);
+}
+
+.mcp-pop__empty {
+  margin: 0 0 12px;
+  padding: 12px;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border: 1px dashed var(--border-color);
+  border-radius: 9px;
+}
+
+.mcp-pop__group {
+  margin-top: 10px;
+  border-top: 1px solid var(--border-color);
+  padding-top: 8px;
+}
+.mcp-pop__disclosure {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.mcp-pop__disclosure:hover {
+  color: var(--text-primary);
+}
+.mcp-pop__disclosure svg {
+  transition: transform 0.14s ease;
+}
+.mcp-pop__disclosure.is-open svg {
+  transform: rotate(180deg);
+}
+
+.mcp-pop__details {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  margin-top: 9px;
+}
+.mcp-pop__note,
+.mcp-pop__foot {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text-tertiary);
+}
+
+.mcp-pop__url {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 7px 7px 10px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+.mcp-pop__url-label {
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+.mcp-pop__url-code {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-primary);
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.mcp-pop__others {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+.mcp-pop__other-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+.mcp-pop__other-name {
+  margin: 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.mcp-pop__code {
+  margin: 0;
+  padding: 9px 11px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow-x: auto;
+}
+.mcp-pop__code code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  white-space: pre;
+}
+
+.mcp-pop__copy {
+  flex-shrink: 0;
+  padding: 3px 9px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+.mcp-pop__copy:hover {
+  color: var(--text-primary);
+  border-color: var(--text-tertiary);
+}
 
 /* ── Find bar ─────────────────────────────────────────────────────── */
 

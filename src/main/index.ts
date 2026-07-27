@@ -36,6 +36,14 @@ async function getCompiler(): Promise<LatexCompiler> {
   return compiler
 }
 
+/** Fixed port the MCP server binds to — also baked into the configs we write. */
+const MCP_PORT = 7332
+
+/** The SSE endpoint agents connect to, known even while the server is offline. */
+function mcpEndpoint(): string {
+  return mcpServer?.getStatus().url ?? `http://localhost:${MCP_PORT}/sse`
+}
+
 async function getMcpServer(): Promise<McpPaperServer> {
   if (!mcpServer) {
     const { McpPaperServer } = await import('./mcp/mcp-server')
@@ -238,7 +246,7 @@ app.whenReady().then(async () => {
   )
 
   // ── MCP server (lazy) ──
-  ipcMain.handle('mcp:start', async () => (await getMcpServer()).start(7332))
+  ipcMain.handle('mcp:start', async () => (await getMcpServer()).start(MCP_PORT))
 
   ipcMain.handle('mcp:stop', async () => {
     if (!mcpServer) return { state: 'offline', port: null, agentCount: 0, url: null }
@@ -249,6 +257,24 @@ app.whenReady().then(async () => {
     if (!mcpServer)
       return { state: 'offline', port: null, agentCount: 0, url: null } as McpStatusInfo
     return mcpServer.getStatus()
+  })
+
+  // ── Agent auto-detection + 1-click wiring ──
+  // The config we write points at the fixed endpoint, so these work whether or
+  // not the server happens to be running right now.
+  ipcMain.handle('mcp:detectAgents', async () => {
+    const { detectAgents } = await import('./mcp/agent-detect')
+    return detectAgents(mcpEndpoint())
+  })
+
+  ipcMain.handle('mcp:connectAgent', async (_, id: string) => {
+    const { connectAgent } = await import('./mcp/agent-detect')
+    return connectAgent(id, mcpEndpoint())
+  })
+
+  ipcMain.handle('mcp:disconnectAgent', async (_, id: string) => {
+    const { disconnectAgent } = await import('./mcp/agent-detect')
+    return disconnectAgent(id, mcpEndpoint())
   })
 
   app.on('activate', () => {

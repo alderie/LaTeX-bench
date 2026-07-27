@@ -75,6 +75,40 @@ export interface McpStatusInfo {
   error?: string
 }
 
+/**
+ * A known MCP client we can auto-detect on this machine and wire to the editor
+ * in one click. Produced by the main-process agent detector, consumed by the
+ * connect popover. `installed`/`connected` reflect the state at detection time
+ * and are refreshed after every connect/disconnect action.
+ */
+export interface DetectedAgent {
+  /** Stable id, e.g. 'claude-code' | 'claude-desktop' | 'cursor'. */
+  id: string
+  /** Display name shown in the popover. */
+  name: string
+  /** One-line hint about how this client reaches the editor. */
+  hint: string
+  /** The client appears installed (a config file or app dir was found). */
+  installed: boolean
+  /** Our MCP server is already present in this client's config. */
+  connected: boolean
+  /** Absolute path to the config file we read/write. */
+  configPath: string
+  /** We can perform a 1-click connect/disconnect by editing the config file. */
+  canAutoConnect: boolean
+  /** Copy-paste setup used as a fallback (and for clients we can't auto-edit). */
+  manualSnippet: string
+}
+
+/** Result of a connect/disconnect action, carrying the refreshed agent record. */
+export interface AgentActionResult {
+  ok: boolean
+  /** Human-readable reason when `ok` is false (e.g. unparseable config). */
+  error?: string
+  /** The agent's state after the action (re-detected), when available. */
+  agent?: DetectedAgent
+}
+
 // ── Preload API contracts ───────────────────────────────────────────────
 
 export interface PaperAPI {
@@ -105,6 +139,12 @@ export interface McpAPI {
   stop: () => Promise<McpStatusInfo>
   getStatus: () => Promise<McpStatusInfo>
   onStatusChanged: (cb: (status: McpStatusInfo) => void) => () => void
+  /** Scan the machine for known MCP clients and their current wiring. */
+  detectAgents: () => Promise<DetectedAgent[]>
+  /** Add our server to a client's own config file. */
+  connectAgent: (id: string) => Promise<AgentActionResult>
+  /** Remove our server from a client's own config file. */
+  disconnectAgent: (id: string) => Promise<AgentActionResult>
 }
 
 export interface SettingsAPI {

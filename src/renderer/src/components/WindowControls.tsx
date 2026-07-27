@@ -1,5 +1,6 @@
 import * as React from 'react'
 import { useEffect, useState } from 'react'
+import { Minus, Square, Copy, X } from 'lucide-react'
 
 // In-app minimise / maximise / close buttons. The window is frameless on
 // Windows and Linux (no native titleBarOverlay), so these are the only
@@ -32,9 +33,7 @@ export function WindowControls(): React.JSX.Element | null {
         title="Minimize"
         aria-label="Minimize"
       >
-        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-          <path d="M0 5h10" stroke="currentColor" strokeWidth="1" fill="none" />
-        </svg>
+        <Minus size={15} strokeWidth={1.5} aria-hidden />
       </button>
 
       <button
@@ -49,26 +48,9 @@ export function WindowControls(): React.JSX.Element | null {
         aria-label={maximized ? 'Restore' : 'Maximize'}
       >
         {maximized ? (
-          <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-            <path
-              d="M2.5 2.5V0.5h7v7h-2M0.5 2.5h7v7h-7z"
-              stroke="currentColor"
-              strokeWidth="1"
-              fill="none"
-            />
-          </svg>
+          <Copy size={13} strokeWidth={1.5} aria-hidden />
         ) : (
-          <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-            <rect
-              x="0.5"
-              y="0.5"
-              width="9"
-              height="9"
-              stroke="currentColor"
-              strokeWidth="1"
-              fill="none"
-            />
-          </svg>
+          <Square size={12} strokeWidth={1.5} aria-hidden />
         )}
       </button>
 
@@ -78,9 +60,7 @@ export function WindowControls(): React.JSX.Element | null {
         title="Close"
         aria-label="Close"
       >
-        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-          <path d="M0.5 0.5l9 9M9.5 0.5l-9 9" stroke="currentColor" strokeWidth="1" fill="none" />
-        </svg>
+        <X size={15} strokeWidth={1.5} aria-hidden />
       </button>
     </div>
   )

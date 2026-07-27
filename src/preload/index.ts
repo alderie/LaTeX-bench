@@ -62,7 +62,10 @@ const mcpAPI: McpAPI = {
     const listener = (_: unknown, status: McpStatusInfo) => cb(status)
     ipcRenderer.on('mcp:status-changed', listener)
     return () => ipcRenderer.removeListener('mcp:status-changed', listener)
-  }
+  },
+  detectAgents: () => ipcRenderer.invoke('mcp:detectAgents'),
+  connectAgent: (id: string) => ipcRenderer.invoke('mcp:connectAgent', id),
+  disconnectAgent: (id: string) => ipcRenderer.invoke('mcp:disconnectAgent', id)
 }
 
 const settingsAPI: SettingsAPI = {

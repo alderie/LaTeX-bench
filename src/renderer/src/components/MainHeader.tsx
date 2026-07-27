@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { useEffect, useState } from 'react'
 import { PanelLeft, Check, Loader2 } from 'lucide-react'
 import { useUiStore } from '../stores/uiStore'
 import { usePaperStore } from '../stores/paperStore'
@@ -14,6 +15,19 @@ export function MainHeader(): React.JSX.Element {
   const dirty = usePaperStore((s) => s.dirty)
   const papers = useLibraryStore((s) => s.papers)
   const activePaper = papers.find((p) => p.id === paperId)
+
+  // "Saved" is worth a beat of attention and then nothing at all — the chip
+  // confirms the write, then recedes to a hairline of text so it stops
+  // competing with the title. Any new edit brings it back to full weight.
+  const [settled, setSettled] = useState(true)
+  useEffect(() => {
+    if (dirty) {
+      setSettled(false)
+      return undefined
+    }
+    const t = setTimeout(() => setSettled(true), 1600)
+    return () => clearTimeout(t)
+  }, [dirty])
 
   return (
     <header className="main-header">
@@ -31,7 +45,9 @@ export function MainHeader(): React.JSX.Element {
           <span className="main-header__paper">{activePaper.title}</span>
           <span
             className={
-              'save-indicator' + (dirty ? ' save-indicator--dirty' : ' save-indicator--saved')
+              'save-indicator' +
+              (dirty ? ' save-indicator--dirty' : ' save-indicator--saved') +
+              (!dirty && settled ? ' save-indicator--settled' : '')
             }
             title={dirty ? 'Saving changes…' : 'All changes saved'}
             aria-live="polite"

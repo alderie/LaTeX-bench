@@ -130,33 +130,107 @@ describe('formula editor', () => {
       expect(field.value.split('&').length).toBeGreaterThan(MATRIX.split('&').length)
     })
 
-    it('adds a row from the toolbar', () => {
-      const { editor, field } = open(MATRIX)
-      const [addRow] = editor.dom.querySelectorAll('.formula-editor__button')
-      ;(addRow as HTMLButtonElement).click()
-      expect(field.value.split('\\\\').length).toBe(3)
+    it('tabs within the matrix the caret is in, not the whole formula', () => {
+      // With two matrices on one line, top-level cell spans belong to the
+      // equation and Tab used to jump between the matrices themselves.
+      const two = String.raw`\begin{pmatrix}a & b\end{pmatrix} + \begin{pmatrix}c & d\end{pmatrix}`
+      const { field } = open(`\\[\n${two}\n\\]`)
+      const caret = field.value.indexOf('c')
+      field.setSelectionRange(caret, caret)
+      press(field, 'Tab')
+      expect(field.selectionStart).toBeLessThan(field.value.indexOf('\\end{pmatrix}', caret) + 1)
+      expect(field.selectionStart).toBeGreaterThan(caret)
     })
 
-    it('dims the grid controls for a formula that has no grid', () => {
-      // Dimmed rather than hidden: removing them would make the bar jump
-      // every time a matrix is typed or deleted.
+  })
+
+  describe('the grid editor', () => {
+    const MATRIX = '\\begin{align}\n  a &= b \\\\\n  c &= d\n\\end{align}'
+    const PAIR = String.raw`\begin{equation*}
+H = \begin{pmatrix}2 & 1 \\ 1 & 2\end{pmatrix}, \qquad H^{-1} = \begin{pmatrix}2 & -1 \\ -1 & 2\end{pmatrix}
+\end{equation*}`
+
+    const cellsOf = (editor: FormulaEditor): HTMLInputElement[] =>
+      [...editor.dom.querySelectorAll('.formula-grid__cell')] as HTMLInputElement[]
+
+    it('appears on its own for a formula that has a matrix', () => {
+      // It used to be two buttons on the toolbar. Nobody presses a button to
+      // find out whether they have a matrix; they can already see that they do.
+      const { editor } = open(PAIR)
+      expect(editor.dom.querySelectorAll('.formula-grid')).toHaveLength(2)
+      expect(cellsOf(editor).map((c) => c.value)).toEqual(['2', '1', '1', '2', '2', '-1', '-1', '2'])
+    })
+
+    it('stays away from a formula that has no grid', () => {
       const { editor } = open()
-      const controls = editor.dom.querySelector('.formula-editor__grid')
-      expect(controls?.classList.contains('formula-editor__grid--off')).toBe(true)
+      expect(editor.dom.querySelector('.formula-grid')).toBeNull()
     })
 
-    it('enables the grid controls for a formula that has one', () => {
-      const { editor } = open(MATRIX)
-      const controls = editor.dom.querySelector('.formula-editor__grid')
-      expect(controls?.classList.contains('formula-editor__grid--off')).toBe(false)
-    })
-
-    it('enables them as soon as a matrix is typed into a plain equation', () => {
+    it('appears as soon as a matrix is typed into a plain equation', () => {
       const { editor, field } = open()
       field.value = '\\begin{pmatrix} a & b \\end{pmatrix}'
       field.dispatchEvent(new window.Event('input'))
-      const controls = editor.dom.querySelector('.formula-editor__grid')
-      expect(controls?.classList.contains('formula-editor__grid--off')).toBe(false)
+      expect(cellsOf(editor).map((c) => c.value)).toEqual(['a', 'b'])
+    })
+
+    it('falls back to the environment itself when nothing is nested in it', () => {
+      const { editor } = open(MATRIX)
+      expect(cellsOf(editor).map((c) => c.value)).toEqual(['a', '= b', 'c', '= d'])
+    })
+
+    it('writes a cell edit back into the source', () => {
+      const { editor, field } = open(PAIR)
+      const cell = cellsOf(editor)[1]
+      cell.value = '7'
+      cell.dispatchEvent(new window.Event('input'))
+      expect(field.value).toContain('\\begin{pmatrix}2 & 7 \\\\ 1 & 2\\end{pmatrix}')
+      // The second matrix is a separate region and must not have moved.
+      expect(field.value).toContain('\\begin{pmatrix}2 & -1 \\\\ -1 & 2\\end{pmatrix}')
+    })
+
+    it('edits the second matrix without disturbing the first', () => {
+      const { editor, field } = open(PAIR)
+      const cell = cellsOf(editor)[7]
+      cell.value = '9'
+      cell.dispatchEvent(new window.Event('input'))
+      expect(field.value).toContain('\\begin{pmatrix}2 & 1 \\\\ 1 & 2\\end{pmatrix}')
+      expect(field.value).toContain('-1 & 9\\end{pmatrix}')
+    })
+
+    it('adds a row to the matrix the button belongs to', () => {
+      const { editor, field } = open(PAIR)
+      const [addRow] = editor.dom.querySelectorAll('.formula-grid__add')
+      ;(addRow as HTMLButtonElement).click()
+      const [first, second] = field.value.split('\\qquad')
+      expect(first.split('\\\\')).toHaveLength(3)
+      expect(second.split('\\\\')).toHaveLength(2)
+    })
+
+    it('removes a column from the edge control', () => {
+      const { editor, field } = open(PAIR)
+      const strips = editor.dom.querySelectorAll('.formula-grid__strip--active')
+      // Row strips come first (one per row), then the column strips.
+      ;(strips[2] as HTMLButtonElement).click()
+      expect(field.value).toContain('\\begin{pmatrix} 1 \\\\ 2\\end{pmatrix}')
+      // Only the first matrix; the second still has both of its columns.
+      expect(field.value).toContain('2 & -1 \\\\ -1 & 2')
+    })
+
+    it('keeps the cells in step when the source is edited directly', () => {
+      const { editor, field } = open(PAIR)
+      field.value = field.value.replace('2 & 1', '5 & 1')
+      field.dispatchEvent(new window.Event('input'))
+      expect(cellsOf(editor)[0].value).toBe('5')
+    })
+
+    it('commits the whole formula on ⌘⏎ from inside a cell', () => {
+      const { editor, commit } = open(PAIR)
+      const cell = cellsOf(editor)[0]
+      cell.value = '4'
+      cell.dispatchEvent(new window.Event('input'))
+      press(cell, 'Enter', { metaKey: true })
+      expect(commit).toHaveBeenCalledTimes(1)
+      expect(commit.mock.calls[0][0]).toContain('4 & 1')
     })
   })
 

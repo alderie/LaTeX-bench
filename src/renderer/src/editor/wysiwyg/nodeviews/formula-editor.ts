@@ -2,18 +2,22 @@ import katex from 'katex'
 import {
   addColumn,
   addRow,
-  cellSpans,
   ENV_CHOICES,
   errorOffset,
-  isGridBody,
+  findGrids,
+  gridCells,
   nextCell,
   parseMathShell,
   presentBody,
+  removeColumn,
+  removeRow,
   serializeMathShell,
+  setCell,
   shellChoice,
   switchEnvironment,
   tidyErrorMessage,
   withLabelText,
+  type GridRegion,
   type MathShell
 } from '../math-source'
 import { completionQuery, completionsFor, applyCompletion, type Completion } from '../math-complete'
@@ -34,7 +38,8 @@ import { createIcon } from '../icons'
 //   - the environment is a choice, so it's a dropdown
 //   - the label is metadata, so it's a field (when detaching it is safe —
 //     see math-source, which leaves per-row labels in an `align` alone)
-//   - the grid shape is structure, so it's two buttons and the Tab key
+//   - the grid shape is structure, so a matrix in the formula gets a grid of
+//     cells to type into, with row and column controls on its edges
 //   - the maths is the only thing left, so it's the only thing in the text
 //     area — dedented, with the wrapper gone
 //
@@ -61,7 +66,9 @@ export class FormulaEditor {
   private field: HTMLInputElement | HTMLTextAreaElement
   private preview: HTMLElement | null = null
   private completions: CompletionPopup | null = null
-  private gridControls: HTMLElement | null = null
+  private gridHost: HTMLElement | null = null
+  private gridSignature = ''
+  private cells: CellHandle[] = []
   private readonly original: string
   private readonly initialBody: string
   private readonly initialChoice: string | null
@@ -84,11 +91,14 @@ export class FormulaEditor {
     if (options.displayMode) {
       this.dom.appendChild(this.buildBar())
       this.dom.appendChild(this.field)
+      this.gridHost = document.createElement('div')
+      this.gridHost.className = 'formula-editor__grids'
+      this.dom.appendChild(this.gridHost)
       this.preview = document.createElement('div')
       this.preview.className = 'math-preview'
       this.dom.appendChild(this.preview)
       this.paint()
-      this.updateGridControls()
+      this.renderGrids()
     } else {
       this.dom.appendChild(this.field)
     }
@@ -159,16 +169,6 @@ export class FormulaEditor {
     if (this.shell.label !== null || this.canCarryLabel()) {
       bar.appendChild(this.buildLabelField())
     }
-
-    this.gridControls = document.createElement('span')
-    this.gridControls.className = 'formula-editor__grid'
-    this.gridControls.appendChild(
-      iconButton('rows', 'Add row', () => this.applyToBody(addRow))
-    )
-    this.gridControls.appendChild(
-      iconButton('columns', 'Add column', () => this.applyToBody(addColumn))
-    )
-    bar.appendChild(this.gridControls)
 
     const spacer = document.createElement('span')
     spacer.className = 'formula-editor__spacer'
@@ -242,34 +242,13 @@ export class FormulaEditor {
     if (this.field instanceof HTMLTextAreaElement) autosize(this.field)
     this.field.focus()
     this.schedulePaint()
-    this.updateGridControls()
-  }
-
-  /** Run a body transform, then put the caret in the cell it created. */
-  private applyToBody(transform: (body: string) => string): void {
-    const before = cellSpans(this.field.value).length
-    const next = transform(this.field.value)
-    this.field.value = next
-    const spans = cellSpans(next)
-    const target = spans[Math.min(before, spans.length - 1)]
-    this.field.focus()
-    if (target) this.field.setSelectionRange(target.to, target.to)
-    if (this.field instanceof HTMLTextAreaElement) autosize(this.field)
-    this.schedulePaint()
+    this.renderGrids()
   }
 
   private onInput(): void {
     this.schedulePaint()
     this.updateCompletions()
-    this.updateGridControls()
-  }
-
-  private updateGridControls(): void {
-    if (!this.gridControls) return
-    this.gridControls.classList.toggle(
-      'formula-editor__grid--off',
-      !isGridBody(this.shell, this.field.value)
-    )
+    this.renderGrids()
   }
 
   private updateCompletions(): void {
@@ -354,19 +333,236 @@ export class FormulaEditor {
   }
 
   /**
-   * Tab across the grid. At the last cell there is nowhere to go, so make
-   * somewhere — every table editor in existence grows on Tab, and stopping
-   * dead at the corner is the behaviour people file bugs about.
+   * Tab across the grid the caret is in. At the last cell there is nowhere
+   * to go, so make somewhere — every table editor in existence grows on Tab,
+   * and stopping dead at the corner is the behaviour people file bugs about.
    */
   private moveCell(direction: 1 | -1): void {
     const caret = this.field.selectionStart ?? 0
-    const target = nextCell(this.field.value, caret, direction)
+    const region = this.regions().find((r) => caret >= r.from && caret <= r.to)
+    const from = region?.from ?? 0
+    const to = region?.to ?? this.field.value.length
+    const target = nextCell(this.field.value.slice(from, to), caret - from, direction)
     if (target) {
-      this.field.setSelectionRange(target.to, target.to)
+      this.field.setSelectionRange(from + target.to, from + target.to)
       return
     }
-    if (direction === -1) return
-    this.applyToBody(addColumn)
+    if (direction === -1 || !region) return
+    this.rewriteRegion(region, addColumn)
+    this.field.focus()
+  }
+
+  // ── The grid ─────────────────────────────────────────────────────────
+  //
+  // Matrices used to be two buttons on the toolbar that added a row or a
+  // column to whatever the top-level structure happened to be. That was
+  // wrong twice over: it did nothing useful for a matrix *nested* inside an
+  // equation (the usual case), and counting ampersands is still how you had
+  // to find the cell you wanted to change. So a formula containing a grid
+  // now shows that grid, one input per cell, without being asked.
+
+  private regions(): GridRegion[] {
+    return findGrids(this.shell, this.field.value)
+  }
+
+  /** Run a transform over one grid's contents, leaving the rest of the body. */
+  private rewriteRegion(region: GridRegion | undefined, transform: (inner: string) => string): void {
+    if (!region) return
+    const value = this.field.value
+    const inner = value.slice(region.from, region.to)
+    this.field.value = value.slice(0, region.from) + transform(inner) + value.slice(region.to)
+    if (this.field instanceof HTMLTextAreaElement) autosize(this.field)
+    this.renderGrids(true)
+    this.schedulePaint()
+  }
+
+  private writeCell(index: number, row: number, column: number, text: string): void {
+    // Regions are re-derived rather than remembered: every edit shifts the
+    // offsets of everything after it in the body.
+    const region = this.regions()[index]
+    if (!region) return
+    const value = this.field.value
+    const inner = setCell(value.slice(region.from, region.to), row, column, text)
+    this.field.value = value.slice(0, region.from) + inner + value.slice(region.to)
+    if (this.field instanceof HTMLTextAreaElement) autosize(this.field)
+    this.schedulePaint()
+  }
+
+  private renderGrids(force = false): void {
+    const host = this.gridHost
+    if (!host) return
+    const body = this.field.value
+    const regions = this.regions()
+    if (regions.length === 0) {
+      host.replaceChildren()
+      this.gridSignature = ''
+      this.cells = []
+      return
+    }
+
+    const tables = regions.map((region) => gridCells(body.slice(region.from, region.to)))
+    const signature = regions
+      .map((r, i) => `${r.env}:${tables[i].length}x${widthOf(tables[i])}`)
+      .join('|')
+
+    // Same shape as last time: resync the text instead of rebuilding, so
+    // editing the source updates the grid without destroying the element the
+    // author is typing into.
+    if (!force && signature === this.gridSignature) {
+      for (const cell of this.cells) {
+        if (cell.input === document.activeElement) continue
+        const value = tables[cell.region]?.[cell.row]?.[cell.column] ?? ''
+        if (cell.input.value !== value) cell.input.value = value
+      }
+      return
+    }
+
+    this.gridSignature = signature
+    this.cells = []
+    host.replaceChildren(
+      ...regions.map((region, index) =>
+        this.buildGrid(region, tables[index], index, regions.length > 1)
+      )
+    )
+  }
+
+  private buildGrid(
+    region: GridRegion,
+    rows: string[][],
+    index: number,
+    named: boolean
+  ): HTMLElement {
+    const panel = document.createElement('div')
+    panel.className = 'formula-grid'
+    const columns = widthOf(rows)
+
+    if (named) {
+      const name = document.createElement('span')
+      name.className = 'formula-grid__env'
+      name.textContent = region.env
+      panel.appendChild(name)
+    }
+
+    const table = document.createElement('div')
+    table.className = 'formula-grid__table'
+    // `auto` columns plus a per-cell `size`: the grid then sits at the width
+    // of its widest entry instead of stretching across the editor, which is
+    // what makes a 2×2 matrix read as a matrix and not as a form.
+    table.style.gridTemplateColumns = `repeat(${columns}, auto) auto`
+
+    rows.forEach((row, r) => {
+      for (let c = 0; c < columns; c++) {
+        const input = document.createElement('input')
+        input.type = 'text'
+        input.className = 'formula-grid__cell'
+        input.spellcheck = false
+        input.value = row[c] ?? ''
+        input.size = Math.min(44, Math.max(4, (row[c] ?? '').length + 1))
+        input.setAttribute('aria-label', `Row ${r + 1}, column ${c + 1}`)
+        input.addEventListener('input', () => this.writeCell(index, r, c, input.value))
+        input.addEventListener('keydown', (event) =>
+          this.onCellKey(event, index, r, c, rows.length, columns)
+        )
+        this.cells.push({ input, region: index, row: r, column: c })
+        table.appendChild(input)
+      }
+      table.appendChild(
+        stripButton(`Remove row ${r + 1}`, rows.length > 1, () =>
+          this.rewriteRegion(this.regions()[index], (inner) => removeRow(inner, r))
+        )
+      )
+    })
+
+    // A footer of column controls, sitting under the columns they act on.
+    for (let c = 0; c < columns; c++) {
+      table.appendChild(
+        stripButton(`Remove column ${c + 1}`, columns > 1, () =>
+          this.rewriteRegion(this.regions()[index], (inner) => removeColumn(inner, c))
+        )
+      )
+    }
+    table.appendChild(document.createElement('span'))
+    panel.appendChild(table)
+
+    const actions = document.createElement('div')
+    actions.className = 'formula-grid__actions'
+    actions.appendChild(
+      addButton('rows', 'Row', () => this.grow(index, addRow, rows.length, 0))
+    )
+    actions.appendChild(
+      addButton('columns', 'Column', () => this.grow(index, addColumn, 0, columns))
+    )
+    panel.appendChild(actions)
+    return panel
+  }
+
+  /** Add a row or a column, then put the caret in the first cell of it. */
+  private grow(
+    index: number,
+    transform: (inner: string) => string,
+    row: number,
+    column: number
+  ): void {
+    const region = this.regions()[index]
+    if (!region) return
+    this.rewriteRegion(region, transform)
+    const created = this.cells.find(
+      (cell) => cell.region === index && cell.row === row && cell.column === column
+    )
+    created?.input.focus()
+  }
+
+  private onCellKey(
+    event: KeyboardEvent,
+    index: number,
+    row: number,
+    column: number,
+    rows: number,
+    columns: number
+  ): void {
+    // Keystrokes here belong to the grid, not to the document underneath.
+    event.stopPropagation()
+
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      this.finish(false)
+      return
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      if (event.metaKey || event.ctrlKey) {
+        this.finish(true)
+        return
+      }
+      if (row === rows - 1) this.grow(index, addRow, rows, 0)
+      else this.focusCell(index, row + 1, column)
+      return
+    }
+    if (event.key === 'Tab') {
+      event.preventDefault()
+      const flat = row * columns + column + (event.shiftKey ? -1 : 1)
+      if (flat < 0) return
+      if (flat >= rows * columns) {
+        this.grow(index, addRow, rows, 0)
+        return
+      }
+      this.focusCell(index, Math.floor(flat / columns), flat % columns)
+      return
+    }
+    const step = ARROWS[event.key]
+    if (step && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault()
+      this.focusCell(index, row + step[0], column + step[1])
+    }
+  }
+
+  private focusCell(index: number, row: number, column: number): void {
+    const cell = this.cells.find(
+      (entry) => entry.region === index && entry.row === row && entry.column === column
+    )
+    if (!cell) return
+    cell.input.focus()
+    cell.input.select()
   }
 
   private schedulePaint(): void {
@@ -581,19 +777,62 @@ class CompletionPopup {
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
-function iconButton(
+/** One cell input, tagged with where it sits so a resync can find it. */
+interface CellHandle {
+  input: HTMLInputElement
+  region: number
+  row: number
+  column: number
+}
+
+const ARROWS: Record<string, [number, number] | undefined> = {
+  ArrowUp: [-1, 0],
+  ArrowDown: [1, 0],
+  ArrowLeft: [0, -1],
+  ArrowRight: [0, 1]
+}
+
+function widthOf(rows: string[][]): number {
+  return Math.max(1, ...rows.map((row) => row.length))
+}
+
+function addButton(
   icon: Parameters<typeof createIcon>[0],
-  title: string,
+  label: string,
   onClick: () => void
 ): HTMLButtonElement {
   const button = document.createElement('button')
   button.type = 'button'
-  button.className = 'formula-editor__button'
-  button.title = title
-  button.setAttribute('aria-label', title)
-  button.appendChild(createIcon(icon, 14))
-  button.appendChild(createIcon('plus', 10))
+  button.className = 'formula-grid__add'
+  button.title = `Add ${label.toLowerCase()}`
+  button.appendChild(createIcon(icon, 13))
+  button.appendChild(createIcon('plus', 9))
+  const text = document.createElement('span')
+  text.textContent = label
+  button.appendChild(text)
   // mousedown would blur the field and commit before the click ran.
+  button.addEventListener('mousedown', (event) => event.preventDefault())
+  button.addEventListener('click', onClick)
+  return button
+}
+
+/**
+ * A remove control on the edge of the grid. Rendered even when there is
+ * nothing left to remove — an empty slot keeps the row and column strips
+ * from reflowing every time the grid changes size.
+ */
+function stripButton(label: string, enabled: boolean, onClick: () => void): HTMLElement {
+  if (!enabled) {
+    const blank = document.createElement('span')
+    blank.className = 'formula-grid__strip'
+    return blank
+  }
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.className = 'formula-grid__strip formula-grid__strip--active'
+  button.title = label
+  button.setAttribute('aria-label', label)
+  button.textContent = '−'
   button.addEventListener('mousedown', (event) => event.preventDefault())
   button.addEventListener('click', onClick)
   return button

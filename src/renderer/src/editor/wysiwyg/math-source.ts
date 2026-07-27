@@ -450,18 +450,86 @@ export function addRow(body: string): string {
   return `${trimmed}${separator}${blank}`
 }
 
-/** Append an empty cell to every row, keeping the grid rectangular. */
-export function addColumn(body: string): string {
+/**
+ * Rewrite each row, rejoining with the row separators the body already used
+ * so a body written one-row-per-line stays that way.
+ */
+function mapRows(body: string, fn: (row: string, index: number) => string): string {
   const rows = splitRows(body)
-  const rebuilt = rows.map((row) => `${row.trimEnd()} & `)
-  // Rejoin with the row separators the body already used, so a body written
-  // one-row-per-line stays that way.
   const seps = separators(body).filter((s) => s.kind === 'row')
-  let out = rebuilt[0]
-  for (let i = 1; i < rebuilt.length; i++) {
-    out += body.slice(seps[i - 1].index, seps[i - 1].index + seps[i - 1].length) + rebuilt[i]
+  let out = fn(rows[0], 0)
+  for (let i = 1; i < rows.length; i++) {
+    out += body.slice(seps[i - 1].index, seps[i - 1].index + seps[i - 1].length) + fn(rows[i], i)
   }
   return out
+}
+
+/** Append an empty cell to every row, keeping the grid rectangular. */
+export function addColumn(body: string): string {
+  return mapRows(body, (row) => `${row.trimEnd()} & `)
+}
+
+/** Drop a row, taking one of the `\\` that bounded it with it. */
+export function removeRow(body: string, index: number): string {
+  const rows = splitRows(body)
+  if (rows.length <= 1 || index < 0 || index >= rows.length) return body
+  const seps = separators(body).filter((s) => s.kind === 'row')
+  // The last row is introduced by the separator before it, so that is the
+  // one to remove — otherwise the body is left ending in a stray `\\`.
+  if (index === rows.length - 1) return body.slice(0, seps[index - 1].index)
+  const start = index === 0 ? 0 : seps[index - 1].index + seps[index - 1].length
+  return body.slice(0, start) + body.slice(seps[index].index + seps[index].length)
+}
+
+/** Drop a column from every row. Rows too short to have one are left alone. */
+export function removeColumn(body: string, index: number): string {
+  if (gridSize(body).columns <= 1) return body
+  return mapRows(body, (row) => {
+    const cells = splitCells(row)
+    if (cells.length <= 1 || index >= cells.length) return row
+    cells.splice(index, 1)
+    // The cells still carry the padding that surrounded them, so `&` alone
+    // rejoins them at their original spacing. Dropping the first column can
+    // leave a space against the environment's opening brace, which LaTeX
+    // ignores; trimming it here would eat the space after a `\\` instead,
+    // since that belongs to the row that follows.
+    return cells.join('&')
+  })
+}
+
+/**
+ * Replace one cell's contents, keeping the whitespace that surrounded it.
+ *
+ * Matrices are commonly written with their columns padded into alignment;
+ * rewriting a cell as `text` alone would collapse that the first time anyone
+ * touched a single entry.
+ */
+export function setCell(body: string, row: number, column: number, text: string): string {
+  const span = cellSpans(body).find((s) => s.row === row && s.column === column)
+  if (!span) return body
+  const original = body.slice(span.from, span.to)
+  const lead = /^\s*/.exec(original)?.[0] ?? ''
+  const rest = original.slice(lead.length)
+  const trail = /\s*$/.exec(rest)?.[0] ?? ''
+  const inner = text.trim()
+  return (
+    body.slice(0, span.from) + lead + inner + (inner === '' ? '' : trail) + body.slice(span.to)
+  )
+}
+
+/**
+ * The body as a rectangle of cell texts. Rows may be ragged.
+ *
+ * Internal whitespace is collapsed, because a cell can span lines in the
+ * source and a one-line field renders the newline as nothing at all — so
+ * `\label{eq:x}\nx_{t+1}` would read as `\label{eq:x}x_{t+1}` and be written
+ * back that way the moment anyone touched it. In maths mode a newline is
+ * just a space, so showing it as one is both honest and harmless.
+ */
+export function gridCells(body: string): string[][] {
+  return splitRows(body).map((row) =>
+    splitCells(row).map((cell) => cell.replace(/\s+/g, ' ').trim())
+  )
 }
 
 /** Rough grid shape, for deciding whether to offer row/column controls. */
@@ -473,14 +541,58 @@ export function gridSize(body: string): { rows: number; columns: number } {
   }
 }
 
+export interface GridRegion {
+  /** Environment name without its star: `pmatrix`, `cases`, `align`. */
+  env: string
+  /** Offsets of the grid's own contents within the body it was found in. */
+  from: number
+  to: number
+}
+
+/** Grid environments opened and closed at the top level of `body`. */
+function topLevelGrids(body: string): GridRegion[] {
+  const out: GridRegion[] = []
+  const stack: Array<{ env: string; contentFrom: number }> = []
+  const re = /\\(begin|end)\{([a-zA-Z]+)\*?\}/g
+  let match: RegExpExecArray | null
+  while ((match = re.exec(body)) !== null) {
+    if (match[1] === 'begin') {
+      // Skip the environment's own arguments — `{cc}` of an `array`, `{2}`
+      // of an `alignat` — so the region starts at real content.
+      const args = /^(?:[ \t]*(?:\[[^\]]*\]|\{[^}]*\}))*/.exec(body.slice(re.lastIndex))?.[0] ?? ''
+      stack.push({ env: match[2], contentFrom: re.lastIndex + args.length })
+      continue
+    }
+    const open = stack.pop()
+    if (open && stack.length === 0 && GRID_ENVIRONMENTS.has(open.env)) {
+      out.push({ env: open.env, from: open.contentFrom, to: match.index })
+    }
+  }
+  return out
+}
+
 /**
- * Whether the formula is grid-shaped — either because its environment is one
- * or because the body contains a matrix. Drives whether the editor shows
- * row/column buttons at all.
+ * The grids in a formula, as spans of its body.
+ *
+ * A matrix nested inside an `equation` is the common case — and there are
+ * often two of them on one line, as in `H = \begin{pmatrix}…\end{pmatrix},
+ * \quad H^{-1} = \tfrac13\begin{pmatrix}…\end{pmatrix}`. Those win over the
+ * outer environment when both are grid-shaped: splitting an `align` into
+ * cells whose contents are entire matrices would be a worse view of the
+ * formula than the matrices themselves.
  */
+export function findGrids(shell: MathShell, body = shell.body): GridRegion[] {
+  const nested = topLevelGrids(body)
+  if (nested.length > 0) return nested
+  if (shell.kind === 'env' && GRID_ENVIRONMENTS.has(shell.env)) {
+    return [{ env: shell.env, from: 0, to: body.length }]
+  }
+  return []
+}
+
+/** Whether the formula has any grid structure worth editing as a grid. */
 export function isGridBody(shell: MathShell, body = shell.body): boolean {
-  if (shell.kind === 'env' && GRID_ENVIRONMENTS.has(shell.env)) return true
-  return /\\begin\{[a-zA-Z]*matrix\*?\}|\\begin\{(cases|array|aligned|split)\}/.test(body)
+  return findGrids(shell, body).length > 0
 }
 
 // ── Errors ─────────────────────────────────────────────────────────────

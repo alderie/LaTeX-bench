@@ -1,4 +1,10 @@
-import { Plugin, PluginKey, TextSelection, type EditorState } from 'prosemirror-state'
+import {
+  NodeSelection,
+  Plugin,
+  PluginKey,
+  Selection,
+  type EditorState
+} from 'prosemirror-state'
 import type { EditorView } from 'prosemirror-view'
 import type { Node as PMNode } from 'prosemirror-model'
 import { latexSchema } from './schema'
@@ -45,14 +51,41 @@ interface SlashItem {
 
 // ── Insertion helpers ──────────────────────────────────────────────────
 
+/**
+ * Where the caret belongs once a node has been inserted at `pos`.
+ *
+ * This used to be an optional `caretOffset` that no entry ever passed, so
+ * every insert left the selection wherever the mapping happened to drop it —
+ * usually just outside the thing that had been asked for. Picking `/equation`
+ * put an empty display on the page and the caret next to it, so the next
+ * keystroke went into the paragraph instead of the formula.
+ */
+/**
+ * Atoms whose node view opens an editor when the node is selected. For these
+ * a `NodeSelection` *is* landing inside the thing.
+ *
+ * Deliberately not every atom: selecting a figure leaves it armed, so the
+ * next keystroke replaces it. Better to sit after one than on top of it.
+ */
+const OPENS_WHEN_SELECTED = new Set(['mathBlock', 'mathInline', 'codeBlock'])
+
+function selectionInside(doc: PMNode, pos: number, node: PMNode): Selection {
+  if (OPENS_WHEN_SELECTED.has(node.type.name)) {
+    try {
+      return NodeSelection.create(doc, pos)
+    } catch {
+      /* not selectable after all; fall through */
+    }
+  }
+  // An atom has no inside, so the nearest useful place is just past it.
+  if (node.isAtom) return Selection.near(doc.resolve(pos + node.nodeSize), 1)
+  // Everything else — theorem, list, float — has a first text position, and
+  // that is where an author expects to be after asking for one.
+  return Selection.near(doc.resolve(pos + 1), 1)
+}
+
 /** Replace the `/query` text with a block node, then put the caret in it. */
-function replaceWithBlock(
-  view: EditorView,
-  from: number,
-  to: number,
-  node: PMNode,
-  caretOffset = 0
-): void {
+function replaceWithBlock(view: EditorView, from: number, to: number, node: PMNode): void {
   const { tr } = view.state
   tr.delete(from, to)
   // `from` now sits in an empty paragraph if the user typed `/` on a blank
@@ -60,23 +93,43 @@ function replaceWithBlock(
   // makes `/equation` produce a display, not a display wrapped in a stub.
   const $pos = tr.doc.resolve(from)
   const parent = $pos.parent
+  let start: number
   if (parent.type.name === 'paragraph' && parent.content.size === 0) {
-    const start = $pos.before()
+    start = $pos.before()
     tr.replaceWith(start, start + parent.nodeSize, node)
   } else {
-    tr.insert($pos.after(), node)
+    start = $pos.after()
+    tr.insert(start, node)
   }
-  if (caretOffset > 0) {
-    const target = Math.min(tr.doc.content.size, from + caretOffset)
-    tr.setSelection(TextSelection.near(tr.doc.resolve(target)))
-  }
+  tr.setSelection(selectionInside(tr.doc, start, node))
   view.dispatch(tr.scrollIntoView())
   view.focus()
 }
 
-/** Replace the `/query` text with an inline node. */
-function replaceWithInline(view: EditorView, from: number, to: number, node: PMNode): void {
+/**
+ * Replace the `/query` text with an inline node.
+ *
+ * `select` is for nodes that open an editor when selected — inline maths.
+ * A citation or a cross-reference is finished the moment it is inserted, so
+ * those leave the caret after the node and let the author keep writing.
+ */
+function replaceWithInline(
+  view: EditorView,
+  from: number,
+  to: number,
+  node: PMNode,
+  select = false
+): void {
   const tr = view.state.tr.replaceWith(from, to, node)
+  if (select) {
+    try {
+      tr.setSelection(NodeSelection.create(tr.doc, from))
+    } catch {
+      /* leave the mapped selection alone */
+    }
+  } else {
+    tr.setSelection(Selection.near(tr.doc.resolve(from + node.nodeSize), 1))
+  }
   view.dispatch(tr.scrollIntoView())
   view.focus()
 }
@@ -193,7 +246,7 @@ const STATIC_ITEMS: SlashItem[] = [
     keywords: 'math formula inline',
     group: 'Math',
     run: (v, f, t) =>
-      replaceWithInline(v, f, t, latexSchema.nodes.mathInline.create({ latex: 'x' }))
+      replaceWithInline(v, f, t, latexSchema.nodes.mathInline.create({ latex: 'x' }), true)
   },
   {
     title: 'Table',
@@ -352,13 +405,16 @@ function dynamicItems(): SlashItem[] {
 
 // ── Matching ───────────────────────────────────────────────────────────
 
+/** Score for a literal substring hit — the weakest match still worth trusting. */
+const SOLID = 50
+
 function scoreItem(item: SlashItem, query: string): number {
   if (!query) return item.group === 'Citations' || item.group === 'Cross-references' ? 1 : 2
   const q = query.toLowerCase()
   const title = item.title.toLowerCase()
   const haystack = `${title} ${item.keywords.toLowerCase()} ${item.hint.toLowerCase()}`
   if (title.startsWith(q)) return 100
-  if (haystack.includes(q)) return 50
+  if (haystack.includes(q)) return SOLID
   // Subsequence match, so `dseq` finds "Display equation".
   let i = 0
   for (const ch of haystack) {
@@ -369,10 +425,15 @@ function scoreItem(item: SlashItem, query: string): number {
 }
 
 function matchingItems(query: string): SlashItem[] {
+  // A query with a space in it is being read as prose until proven otherwise,
+  // so subsequence matches don't count: almost any sentence is a subsequence
+  // of *something* in a forty-entry catalogue, and a menu that stays open
+  // over ordinary writing is worse than one that closes too eagerly.
+  const floor = /\s/.test(query) ? SOLID : 1
   const all = [...STATIC_ITEMS, ...dynamicItems()]
   return all
     .map((item) => ({ item, score: scoreItem(item, query) }))
-    .filter((entry) => entry.score > 0)
+    .filter((entry) => entry.score >= floor)
     .sort((a, b) => b.score - a.score)
     .slice(0, 40)
     .map((entry) => entry.item)
@@ -382,6 +443,31 @@ function matchingItems(query: string): SlashItem[] {
 
 // A `/` only opens the menu at a word boundary, so a URL or a maths
 // expression typed in prose doesn't trigger it.
+/** Beyond this the author is plainly writing, not choosing. */
+const MAX_QUERY = 48
+
+/**
+ * Whether the menu should stay open for `query`.
+ *
+ * The old rule was "any whitespace closes it", which is what an @-mention
+ * does and is wrong here: the things worth searching for have spaces in
+ * their names. A cross-reference reads "Theorem 3.2" and a citation reads
+ * "Knuth 1984", so `/theorem 3` died on the space bar exactly when it was
+ * about to become useful.
+ *
+ * So spaces are allowed and the stop condition is meaning instead: once
+ * nothing in the catalogue matches the words typed so far, the author has
+ * moved on to prose and the menu gets out of the way.
+ */
+function queryLives(query: string): boolean {
+  if (/\n/.test(query)) return false
+  if (query.length > MAX_QUERY) return false
+  if (!/\s/.test(query)) return true
+  // `/ ` on its own is a slash followed by a space, not a search.
+  if (query.trim() === '') return false
+  return matchingItems(query).length > 0
+}
+
 function opensMenu(state: EditorState, pos: number): boolean {
   const $pos = state.doc.resolve(pos)
   if (!$pos.parent.isTextblock) return false
@@ -586,7 +672,7 @@ export function slashMenu(): Plugin<SlashState> {
         const text = newState.doc.textBetween(from, head, '\n', '\ufffc')
         if (!text.startsWith('/')) return { from: null, query: '' }
         const query = text.slice(1)
-        if (/[\s\n]/.test(query)) return { from: null, query: '' }
+        if (!queryLives(query)) return { from: null, query: '' }
         return { from, query }
       }
     },

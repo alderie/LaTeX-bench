@@ -926,32 +926,6 @@
   font-family: var(--font-mono);
   font-size: 11px;
 }
-.formula-editor__grid {
-  display: inline-flex;
-  gap: 2px;
-}
-/* Row/column controls mean nothing outside a grid, but hiding them
-   entirely makes the bar jump every time a matrix is typed or deleted. */
-.formula-editor__grid--off {
-  opacity: 0.3;
-  pointer-events: none;
-}
-.formula-editor__button {
-  display: inline-flex;
-  align-items: center;
-  gap: 1px;
-  height: 22px;
-  padding: 0 5px;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  background: var(--bg-primary);
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-.formula-editor__button:hover {
-  background: var(--overlay-hover);
-  color: var(--text-primary);
-}
 .formula-editor__hint {
   font-size: 10px;
   color: var(--text-tertiary);
@@ -966,6 +940,109 @@
   margin-top: 0;
   border-top: 1px dashed var(--border-color);
   background: var(--bg-secondary);
+}
+
+/* ── The grid editor ─────────────────────────────────────────────────
+   Appears by itself whenever the formula contains a matrix, cases, or an
+   aligned environment: one input per cell, with row and column controls
+   on the edges. Sits between the source and the preview, so a change can
+   be watched from the cell it was typed in to the rendered result. */
+.formula-editor__grids:empty {
+  display: none;
+}
+.formula-grid {
+  padding: 8px 10px;
+  border-top: 1px dashed var(--border-color);
+  font-family: var(--font-sans);
+  font-size: 11px;
+}
+.formula-grid__env {
+  display: block;
+  margin-bottom: 5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+.formula-grid__table {
+  display: grid;
+  gap: 3px;
+  align-items: center;
+  justify-content: start;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+.formula-grid__cell {
+  min-width: 3.5rem;
+  max-width: 100%;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  outline: none;
+}
+.formula-grid__cell:hover {
+  border-color: var(--text-tertiary);
+}
+.formula-grid__cell:focus {
+  border-color: var(--accent-color, var(--text-primary));
+  background: var(--bg-secondary);
+}
+/* The remove controls are a standing offer, not a call to action: they
+   stay faint until the pointer is somewhere in the grid. */
+.formula-grid__strip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 13px;
+  line-height: 1;
+  padding: 0;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.formula-grid__strip--active {
+  cursor: pointer;
+}
+.formula-grid:hover .formula-grid__strip--active,
+.formula-grid__strip--active:focus-visible {
+  opacity: 0.6;
+}
+.formula-grid__strip--active:hover,
+.formula-grid__strip--active:focus-visible {
+  opacity: 1;
+  background: var(--overlay-hover);
+  color: var(--status-error, var(--text-primary));
+}
+.formula-grid__actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 5px;
+}
+.formula-grid__add {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 20px;
+  padding: 0 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font: inherit;
+  cursor: pointer;
+}
+.formula-grid__add:hover {
+  background: var(--overlay-hover);
+  color: var(--text-primary);
 }
 .formula-editor--inline {
   display: inline;
@@ -1559,9 +1636,13 @@
   border-left-color: var(--text-tertiary);
   background: transparent;
 }
-.wysiwyg-editor .ProseMirror aside[data-theorem]::before {
-  content: attr(data-kind);
-  display: block;
+/* The header is a real element rather than a `::before`, so the kind and
+   the title can be clicked and changed in place. */
+.wysiwyg-editor .ProseMirror .theorem-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35em;
+  flex-wrap: wrap;
   font-family: var(--font-sans);
   font-size: 0.75em;
   font-weight: 700;
@@ -1569,21 +1650,87 @@
   letter-spacing: 0.05em;
   color: var(--text-primary);
   margin-bottom: 0.4em;
+  user-select: none;
 }
-/* When the registry has assigned this theorem a number, surface it
-   inline with the kind label: "Theorem 3.1". */
-.wysiwyg-editor .ProseMirror aside[data-theorem][data-number]::before {
-  content: attr(data-kind) ' ' attr(data-number);
+.wysiwyg-editor .ProseMirror .theorem-head__kind {
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  padding: 0 1px;
+  margin: 0 -1px;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
 }
-.wysiwyg-editor .ProseMirror aside[data-theorem][data-title]::before {
-  content: attr(data-kind) ' (' attr(data-title) ')';
+.wysiwyg-editor .ProseMirror .theorem-head__kind:hover,
+.wysiwyg-editor .ProseMirror .theorem-head__kind:focus-visible {
+  background: var(--overlay-hover);
+  border-color: var(--border-color);
+  outline: none;
 }
-.wysiwyg-editor .ProseMirror aside[data-theorem][data-number][data-title]::before {
-  content: attr(data-kind) ' ' attr(data-number) ' (' attr(data-title) ')';
+.wysiwyg-editor .ProseMirror .theorem-head__number:empty { display: none; }
+.wysiwyg-editor .ProseMirror .theorem-head__title,
+.wysiwyg-editor .ProseMirror .theorem-head__add {
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  padding: 0 3px;
+  margin: 0 -3px;
+  cursor: text;
 }
-.wysiwyg-editor .ProseMirror aside[data-theorem] > p:first-of-type { margin-top: 0; }
-.wysiwyg-editor .ProseMirror aside[data-theorem] > p:last-of-type { margin-bottom: 0; }
-.wysiwyg-editor .ProseMirror aside[data-theorem][data-kind='proof'] > p:last-of-type::after {
+.wysiwyg-editor .ProseMirror .theorem-head__title {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+.wysiwyg-editor .ProseMirror .theorem-head__title:hover,
+.wysiwyg-editor .ProseMirror .theorem-head__title:focus-visible {
+  background: var(--overlay-hover);
+  border-color: var(--border-color);
+  outline: none;
+}
+/* Most theorems have no title, and a permanent "+ name" on every one of
+   them would be noise. It appears when the pointer is over the theorem, or
+   whenever it is keyboard-focused. */
+.wysiwyg-editor .ProseMirror .theorem-head__add {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--text-tertiary);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.wysiwyg-editor .ProseMirror aside[data-theorem]:hover .theorem-head__add,
+.wysiwyg-editor .ProseMirror .theorem-head__add:focus-visible {
+  opacity: 1;
+  outline: none;
+}
+.wysiwyg-editor .ProseMirror .theorem-head__add:hover {
+  color: var(--text-secondary);
+  background: var(--overlay-hover);
+}
+.wysiwyg-editor .ProseMirror .theorem-head__input {
+  font: inherit;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  border: 1px solid var(--accent-color, var(--border-color));
+  border-radius: 3px;
+  padding: 0 4px;
+  min-width: 8ch;
+  width: 18ch;
+  outline: none;
+}
+.wysiwyg-editor .ProseMirror .theorem-body > p:first-of-type { margin-top: 0; }
+.wysiwyg-editor .ProseMirror .theorem-body > p:last-of-type { margin-bottom: 0; }
+.wysiwyg-editor .ProseMirror aside[data-theorem][data-kind='proof'] .theorem-body > p:last-of-type::after {
   content: ' \220E';
   margin-left: 0.5em;
   color: var(--text-tertiary);

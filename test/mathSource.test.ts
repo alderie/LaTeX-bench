@@ -4,10 +4,15 @@ import {
   addRow,
   cellSpans,
   errorOffset,
+  findGrids,
+  gridCells,
   nextCell,
   parseMathShell,
   presentBody,
+  removeColumn,
+  removeRow,
   serializeMathShell,
+  setCell,
   shellChoice,
   splitCells,
   splitRows,
@@ -190,5 +195,112 @@ describe('KaTeX error messages', () => {
 
   it('survives a message with no position at all', () => {
     expect(errorOffset('KaTeX parse error: something went wrong')).toBeNull()
+  })
+})
+
+describe('finding the grids in a formula', () => {
+  const shellOf = (latex: string): ReturnType<typeof parseMathShell> => parseMathShell(latex)
+
+  it('finds a matrix nested inside an equation', () => {
+    const shell = shellOf('\\begin{equation}\nA = \\begin{pmatrix}1 & 2\\end{pmatrix}\n\\end{equation}')
+    const grids = findGrids(shell, presentBody(shell))
+    expect(grids).toHaveLength(1)
+    expect(grids[0].env).toBe('pmatrix')
+    expect(presentBody(shell).slice(grids[0].from, grids[0].to)).toBe('1 & 2')
+  })
+
+  it('finds both matrices when a line has two of them', () => {
+    // The case that made the old toolbar buttons useless: one equation,
+    // two independent grids, and no way to say which one to grow.
+    const body = String.raw`H = \begin{pmatrix}2 & 1\end{pmatrix}, H^{-1} = \begin{bmatrix}0 & 1\end{bmatrix}`
+    const grids = findGrids(shellOf(`\\[\n${body}\n\\]`), body)
+    expect(grids.map((g) => g.env)).toEqual(['pmatrix', 'bmatrix'])
+  })
+
+  it('reports only the outer grid when one is nested in another', () => {
+    const body = String.raw`\begin{pmatrix}\begin{smallmatrix}1\end{smallmatrix} & 2\end{pmatrix}`
+    expect(findGrids(shellOf(`\\[\n${body}\n\\]`), body).map((g) => g.env)).toEqual(['pmatrix'])
+  })
+
+  it('skips the environment’s own arguments', () => {
+    const body = String.raw`\begin{array}{cc}1 & 2\end{array}`
+    const [grid] = findGrids(shellOf(`\\[\n${body}\n\\]`), body)
+    expect(body.slice(grid.from, grid.to)).toBe('1 & 2')
+  })
+
+  it('falls back to the environment itself when nothing is nested', () => {
+    const shell = shellOf('\\begin{align}\na &= b\n\\end{align}')
+    expect(findGrids(shell, presentBody(shell))).toEqual([
+      { env: 'align', from: 0, to: 'a &= b'.length }
+    ])
+  })
+
+  it('finds nothing in a formula that has no grid', () => {
+    const shell = shellOf('\\begin{equation}\nx = y\n\\end{equation}')
+    expect(findGrids(shell, presentBody(shell))).toEqual([])
+  })
+})
+
+describe('editing a grid cell by cell', () => {
+  const BODY = '1 & 2 \\\\ 3 & 4'
+
+  it('lays the body out as a rectangle of trimmed cells', () => {
+    expect(gridCells(BODY)).toEqual([
+      ['1', '2'],
+      ['3', '4']
+    ])
+  })
+
+  it('replaces one cell and keeps the padding around it', () => {
+    // Matrices are commonly padded into alignment by hand; changing one
+    // entry shouldn't collapse the column.
+    expect(setCell('1  &  2', 0, 1, '10')).toBe('1  &  10')
+  })
+
+  it('leaves the rest of the body alone', () => {
+    expect(setCell(BODY, 1, 0, 'x')).toBe('1 & 2 \\\\ x & 4')
+  })
+
+  it('ignores a cell that isn’t there', () => {
+    expect(setCell(BODY, 5, 5, 'x')).toBe(BODY)
+  })
+
+  it('removes a middle row along with one separator', () => {
+    expect(removeRow('a \\\\ b \\\\ c', 1)).toBe('a \\\\ c')
+  })
+
+  it('removes the last row without leaving a trailing break', () => {
+    expect(removeRow('a \\\\ b', 1)).toBe('a ')
+  })
+
+  it('refuses to remove the only row', () => {
+    expect(removeRow('a & b', 0)).toBe('a & b')
+  })
+
+  it('removes a column from every row', () => {
+    expect(removeColumn(BODY, 0)).toBe(' 2 \\\\ 4')
+  })
+
+  it('refuses to remove the only column', () => {
+    expect(removeColumn('a \\\\ b', 0)).toBe('a \\\\ b')
+  })
+
+  it('keeps rows on their own lines when a column is added', () => {
+    expect(addColumn('a & b \\\\\nc & d')).toBe('a & b & \\\\\nc & d & ')
+  })
+})
+
+describe('cells that span lines', () => {
+  it('shows a multi-line cell on one line', () => {
+    // A one-line field renders a newline as nothing, so the source
+    // `\label{eq:x}\nx_{t+1}` would read as one run-on token — and be
+    // written back that way the first time the cell was touched.
+    const body = '\\label{eq:x}\n  x_{t+1} &= y'
+    expect(gridCells(body)[0][0]).toBe('\\label{eq:x} x_{t+1}')
+  })
+
+  it('leaves the rest of the source alone when such a cell is edited', () => {
+    const body = 'a\n  b &= c'
+    expect(setCell(body, 0, 1, '= d')).toBe('a\n  b &= d')
   })
 })

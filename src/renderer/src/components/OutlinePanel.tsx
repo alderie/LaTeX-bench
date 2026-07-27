@@ -23,11 +23,11 @@ export function OutlinePanel(): React.JSX.Element | null {
   const open = useUiStore((s) => s.outlineOpen)
   const toggle = useUiStore((s) => s.toggleOutline)
   const viewMode = useUiStore((s) => s.viewMode)
-  const tex = usePaperStore((s) => s.tex)
   const files = usePaperStore((s) => s.files)
   const activeFile = usePaperStore((s) => s.activeFile)
   const openFile = usePaperStore((s) => s.openFile)
 
+  const tex = useSettledTex(open)
   const sections = useMemo(() => extractSections(tex), [tex])
   const activeIndex = useCurrentSectionIndex(sections, open && viewMode === 'source')
 
@@ -123,6 +123,38 @@ export function OutlinePanel(): React.JSX.Element | null {
       </div>
     </aside>
   )
+}
+
+/** How long the source has to stop changing before the outline re-reads it. */
+const SETTLE_MS = 300
+
+/**
+ * The document, sampled on a trailing delay rather than per keystroke.
+ *
+ * Re-extracting the outline of a long paper on every character — and
+ * re-rendering a list of fifty headings with it — is the same cost the
+ * source view's status line already refuses to pay for its word count. An
+ * outline that is 300ms stale is indistinguishable from a current one.
+ */
+function useSettledTex(enabled: boolean): string {
+  const [tex, setTex] = useState(() => usePaperStore.getState().tex)
+
+  useEffect(() => {
+    if (!enabled) return undefined
+    setTex(usePaperStore.getState().tex)
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const unsubscribe = usePaperStore.subscribe((s, prev) => {
+      if (s.tex === prev.tex && s.activeFile === prev.activeFile) return
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => setTex(usePaperStore.getState().tex), SETTLE_MS)
+    })
+    return () => {
+      if (timer) clearTimeout(timer)
+      unsubscribe()
+    }
+  }, [enabled])
+
+  return tex
 }
 
 /**

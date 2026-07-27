@@ -496,6 +496,110 @@
 .wysiwyg-editor .ProseMirror ul,
 .wysiwyg-editor .ProseMirror ol { padding-left: 1.5em; margin: 0.4em 0 0.9em 0; }
 .wysiwyg-editor .ProseMirror li { margin: 0.2em 0; }
+/* Right-aligned shortcut hint in the command palette. */
+.command-palette__shortcut {
+  margin-left: auto;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+}
+
+/* ── Render containment ──────────────────────────────────────────────
+   Zoom changes the paper's root font size, which invalidates layout for
+   the whole document. These rules keep that cost proportional to what is
+   actually on screen.
+
+   `content-visibility` is applied only to non-editable atoms — rendered
+   maths, raw blocks, code — so the caret can never be inside a subtree the
+   browser skipped. `contain-intrinsic-size` supplies a placeholder height
+   so skipping doesn't make the scrollbar jump. */
+.wysiwyg-editor .math-block,
+.wysiwyg-editor .raw-latex-block,
+.wysiwyg-editor .code-block {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 3em;
+}
+/* A KaTeX subtree is large and its layout is self-contained; without this
+   every re-render of one formula invalidates its ancestors too. */
+.wysiwyg-editor .math-block,
+.wysiwyg-editor .math-inline {
+  contain: layout style;
+}
+
+/* ── Editor toolbar ──────────────────────────────────────────────────
+   A thin formatting strip under the header. Sized to read as secondary
+   chrome: the document is the interface, this is a reminder of what's
+   available. */
+.editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 10px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  -webkit-app-region: no-drag;
+  user-select: none;
+}
+.editor-toolbar__group {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+.editor-toolbar__divider {
+  width: 1px;
+  align-self: stretch;
+  margin: 4px 6px;
+  background: var(--border-color);
+}
+.editor-toolbar__spacer { flex: 1; }
+
+.editor-toolbar__button {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  padding: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.editor-toolbar__button:hover:not(:disabled) {
+  background: var(--overlay-hover);
+  color: var(--text-primary);
+}
+.editor-toolbar__button--active {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+.editor-toolbar__button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* The zoom percentage doubles as the reset button. */
+.editor-toolbar__zoom {
+  min-width: 46px;
+  height: 24px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.editor-toolbar__zoom:hover {
+  background: var(--overlay-hover);
+  color: var(--text-primary);
+}
+
 /* ── Slash command menu ──────────────────────────────────────────────
    Anchored to the caret in page coordinates (the plugin positions it), so
    it needs to sit above everything and never inherit the paper's serif. */

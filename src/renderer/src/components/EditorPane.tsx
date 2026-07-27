@@ -2,6 +2,7 @@ import * as React from 'react'
 import { Suspense, lazy } from 'react'
 import { usePaperStore } from '../stores/paperStore'
 import { useUiStore } from '../stores/uiStore'
+import { EditorToolbar } from './EditorToolbar'
 
 // CodeMirror / ProseMirror are heavy — split into their own chunks.
 const SourceEditor = lazy(() =>
@@ -27,6 +28,7 @@ export function EditorPane(): React.JSX.Element {
 
   return (
     <main className="editor-pane">
+      <EditorToolbar />
       <div className="editor-pane__body">
         {viewMode === 'source' ? (
           <Suspense fallback={<div className="editor-pane__placeholder">Loading editor…</div>}>

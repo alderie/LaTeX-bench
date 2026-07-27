@@ -15,6 +15,7 @@ import type { BuildError } from '@shared/types'
 import { usePaperStore } from '../stores/paperStore'
 import { useUiStore } from '../stores/uiStore'
 import { jumpToLine } from '../editor/navigate'
+import { TexInstallCard, useTexState } from './TexInstallCard'
 
 // What the compiler said.
 //
@@ -42,7 +43,7 @@ function StateBadge({
   if (state === 'running' || state === 'queued') {
     return (
       <span className="build-panel__state build-panel__state--running">
-        <Loader2 size={13} className="build-panel__spin" />
+        <Loader2 size={13} strokeWidth={2.5} className="build-panel__spin" />
         {state === 'queued' ? 'Queued' : 'Compiling…'}
       </span>
     )
@@ -50,7 +51,7 @@ function StateBadge({
   if (state === 'success') {
     return (
       <span className="build-panel__state build-panel__state--ok">
-        <CheckCircle2 size={13} />
+        <CheckCircle2 size={13} strokeWidth={2.5} />
         Compiled{durationMs > 0 ? ` in ${(durationMs / 1000).toFixed(1)}s` : ''}
       </span>
     )
@@ -58,14 +59,14 @@ function StateBadge({
   if (state === 'error') {
     return (
       <span className="build-panel__state build-panel__state--bad">
-        <XCircle size={13} />
+        <XCircle size={13} strokeWidth={2.5} />
         Build failed
       </span>
     )
   }
   return (
     <span className="build-panel__state build-panel__state--idle">
-      <CircleSlash size={13} />
+      <CircleSlash size={13} strokeWidth={2.5} />
       Not built yet
     </span>
   )
@@ -79,6 +80,7 @@ export function BuildPanel(): React.JSX.Element | null {
   const setOpen = useUiStore((s) => s.setBuildPanelOpen)
   const [showLog, setShowLog] = useState(false)
   const logRef = useRef<HTMLPreElement | null>(null)
+  useTexState()
 
   const { errors, warnings } = useMemo(() => split(build.errors), [build.errors])
 
@@ -122,13 +124,13 @@ export function BuildPanel(): React.JSX.Element | null {
           <span className="build-panel__summary">
             {errors.length > 0 && (
               <span className="build-panel__count build-panel__count--error">
-                <XCircle size={12} />
+                <XCircle size={12} strokeWidth={2.5} />
                 {errors.length}
               </span>
             )}
             {warnings.length > 0 && (
               <span className="build-panel__count build-panel__count--warning">
-                <AlertTriangle size={12} />
+                <AlertTriangle size={12} strokeWidth={2.5} />
                 {warnings.length}
               </span>
             )}
@@ -158,6 +160,10 @@ export function BuildPanel(): React.JSX.Element | null {
             </button>
           </div>
 
+          {/* Above the problem list, because when it shows at all it is the
+              answer to every problem in that list. */}
+          <TexInstallCard />
+
           {showLog ? (
             <pre className="build-panel__log" ref={logRef}>
               {build.log ? build.log.slice(-MAX_LOG_CHARS) : 'No output yet.'}
@@ -175,7 +181,7 @@ function ProblemList({ errors }: { errors: BuildError[] }): React.JSX.Element {
   if (errors.length === 0) {
     return (
       <div className="build-panel__empty">
-        <CheckCircle2 size={16} />
+        <CheckCircle2 size={16} strokeWidth={2.25} />
         <span>Nothing to report.</span>
       </div>
     )
@@ -220,10 +226,13 @@ function ProblemRow({ error }: { error: BuildError }): React.JSX.Element {
       }}
       title={locatable ? `Go to ${where}` : undefined}
     >
+      {/* Heavier than the default stroke: at 13px on a muted red these are
+          a few dozen pixels of outline, and a hairline reads as a smudge
+          rather than as a symbol. */}
       {error.severity === 'warning' ? (
-        <AlertTriangle size={13} className="build-panel__row-icon" />
+        <AlertTriangle size={14} strokeWidth={2.5} className="build-panel__row-icon" />
       ) : (
-        <XCircle size={13} className="build-panel__row-icon" />
+        <XCircle size={14} strokeWidth={2.5} className="build-panel__row-icon" />
       )}
       <span className="build-panel__row-message">{error.message}</span>
       {where && <span className="build-panel__row-where">{where}</span>}

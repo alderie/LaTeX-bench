@@ -6,6 +6,7 @@ import type { BrowserWindow } from 'electron'
 import type { BuildError, BuildResult, PaperSettings } from '../../shared/types'
 import type { PaperStoreManager } from '../store'
 import { parseLatexLog } from './log-parser'
+import { managedExecutable, texEnv } from './managed-tex'
 
 // Spawns user-installed pdflatex / xelatex / latexmk. Streams progress lines
 // to the renderer; on success copies the PDF to <paperDir>/out/main.pdf.
@@ -29,11 +30,19 @@ export class LatexCompiler {
     const start = Date.now()
     const { cmd, args } = buildCommand(settings.engine, settings.mainFile)
 
+    // Prefer the TeX the app installed for itself. Spawning the absolute
+    // path is not enough on its own — `latexmk` shells out to `pdflatex` and
+    // `biber` by name — so the child's PATH leads with the managed `bin` too.
+    const managed = managedExecutable(store.rootDir, cmd)
+    const command = managed ?? cmd
+    const env = texEnv(store.rootDir)
+
     return new Promise<BuildResult>((resolve) => {
-      const child = spawn(cmd, args, {
+      const child = spawn(command, args, {
         cwd: paperDir,
         windowsHide: true,
-        shell: false
+        shell: false,
+        env
       })
       this.running.set(paperId, child)
 
@@ -76,7 +85,10 @@ export class LatexCompiler {
           log: stderr || err.message,
           errors: [
             {
-              message: `Failed to spawn '${cmd}': ${err.message}. Is TeX Live / MiKTeX installed and on PATH?`,
+              // The install button in the build panel keys off this being
+              // the reason a build failed, so the wording says what is
+              // missing rather than only that something went wrong.
+              message: `No LaTeX engine found: '${cmd}' could not be started (${err.message}). Install TeX from the build panel, or install TeX Live / MiKTeX yourself and put it on PATH.`,
               severity: 'error'
             }
           ],

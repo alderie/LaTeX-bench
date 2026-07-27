@@ -11,6 +11,8 @@ import type {
   PaperMeta,
   PaperSettings,
   SettingsAPI,
+  TexAPI,
+  TexInstallProgress,
   WindowAPI,
   WindowState
 } from '../shared/types'
@@ -61,6 +63,19 @@ const latexAPI: LatexAPI = {
   }
 }
 
+const texAPI: TexAPI = {
+  getState: () => ipcRenderer.invoke('tex:getState'),
+  install: () => ipcRenderer.invoke('tex:install'),
+  cancel: () => ipcRenderer.invoke('tex:cancel'),
+  remove: () => ipcRenderer.invoke('tex:remove'),
+  reveal: () => ipcRenderer.invoke('tex:reveal'),
+  onProgress: (cb) => {
+    const listener = (_: unknown, progress: TexInstallProgress): void => cb(progress)
+    ipcRenderer.on('tex:install-progress', listener)
+    return () => ipcRenderer.removeListener('tex:install-progress', listener)
+  }
+}
+
 const mcpAPI: McpAPI = {
   start: () => ipcRenderer.invoke('mcp:start'),
   stop: () => ipcRenderer.invoke('mcp:stop'),
@@ -100,6 +115,7 @@ if (process.contextIsolated) {
     contextBridge.exposeInMainWorld('electron', electronAPI)
     contextBridge.exposeInMainWorld('paperAPI', paperAPI)
     contextBridge.exposeInMainWorld('latexAPI', latexAPI)
+    contextBridge.exposeInMainWorld('texAPI', texAPI)
     contextBridge.exposeInMainWorld('mcpAPI', mcpAPI)
     contextBridge.exposeInMainWorld('settingsAPI', settingsAPI)
     contextBridge.exposeInMainWorld('windowAPI', windowAPI)
@@ -114,6 +130,8 @@ if (process.contextIsolated) {
   // @ts-ignore
   window.latexAPI = latexAPI
   // @ts-ignore
+  window.texAPI = texAPI
+  // @ts-ignore
   window.mcpAPI = mcpAPI
   // @ts-ignore
   window.settingsAPI = settingsAPI
@@ -123,4 +141,4 @@ if (process.contextIsolated) {
 
 // Re-export types for tooling — not actually emitted by tsc since this file
 // is consumed at runtime via electron-vite's preload build.
-export type { PaperAPI, LatexAPI, McpAPI, SettingsAPI, WindowAPI, EngineInfo, PaperMeta }
+export type { PaperAPI, LatexAPI, McpAPI, SettingsAPI, TexAPI, WindowAPI, EngineInfo, PaperMeta }

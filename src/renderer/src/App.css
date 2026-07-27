@@ -949,6 +949,122 @@ body.is-resizing-preview {
   font-size: 11.5px;
 }
 
+/* ── Managed TeX installation ─────────────────────────────────────── */
+
+.tex-install {
+  flex-shrink: 0;
+  margin: 8px 10px 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  background: var(--bg-secondary);
+  font-size: 11.5px;
+}
+.tex-install--ready {
+  border-color: color-mix(in srgb, var(--status-ok) 35%, var(--border-color));
+}
+.tex-install--busy {
+  border-color: color-mix(in srgb, var(--editor-cursor) 40%, var(--border-color));
+}
+
+.tex-install__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-primary);
+}
+
+.tex-install__title {
+  font-weight: 500;
+}
+.tex-install__ok {
+  color: var(--status-ok);
+}
+.tex-install__meta,
+.tex-install__percent {
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.tex-install__spacer {
+  flex: 1;
+}
+
+.tex-install__action {
+  padding: 4px 11px;
+  border: none;
+  border-radius: 6px;
+  background: var(--text-primary);
+  color: var(--bg-primary);
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.tex-install__action:hover {
+  background: var(--text-secondary);
+}
+
+.tex-install__ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.tex-install__ghost:hover {
+  background: var(--overlay-hover);
+  color: var(--text-primary);
+}
+
+.tex-install__danger {
+  padding: 3px 9px;
+  border: none;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--status-error) 16%, transparent);
+  color: var(--status-error);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.tex-install__danger:hover {
+  background: color-mix(in srgb, var(--status-error) 26%, transparent);
+}
+
+.tex-install__detail {
+  margin: 5px 0 0;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+/* A determinate bar, because the package counter makes it determinate. An
+   indeterminate shimmer over a five-minute download says less than a number. */
+.tex-install__bar {
+  height: 4px;
+  margin-top: 7px;
+  border-radius: 2px;
+  background: var(--overlay-hover);
+  overflow: hidden;
+}
+.tex-install__bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--editor-cursor);
+  transition: width 0.25s ease;
+}
+
+.tex-install__spin {
+  animation: build-panel-spin 0.9s linear infinite;
+  color: var(--editor-cursor);
+}
+
 /* ── PDF preview ──────────────────────────────────────────────────── */
 
 .pdf-preview {

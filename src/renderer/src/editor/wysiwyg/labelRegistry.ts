@@ -607,7 +607,33 @@ export function rebuild(doc: PMNode): void {
     equationNumbersByPos: ctx.equationNumbersByPos,
     floatNumbersByPos: ctx.floatNumbersByPos
   }
-  notify()
+
+  // Only wake the subscribers when the numbering actually moved.
+  //
+  // Every math node view subscribes, and every notification re-runs KaTeX on
+  // its formula. Typing a character in a paragraph shifts document positions
+  // but changes no number, so an unconditional notify re-rendered every
+  // equation in the paper on every keystroke — the single largest source of
+  // typing lag in a maths-heavy document.
+  const signature = signatureOf(state)
+  if (signature !== lastSignature) {
+    lastSignature = signature
+    notify()
+  }
+}
+
+let lastSignature = ''
+
+// Cheap structural fingerprint of everything a subscriber can observe.
+// Positions are included because a node view looks its numbering up *by*
+// position, so a pure position shift still has to reach it.
+function signatureOf(s: RegistryState): string {
+  const parts: string[] = []
+  for (const [key, ref] of s.byKey) parts.push(`${key}=${ref.pretty}`)
+  for (const [key, cite] of s.citations) parts.push(`${key}#${cite.number}`)
+  for (const [pos, tags] of s.equationNumbersByPos) parts.push(`${pos}:${tags.join('|')}`)
+  for (const [pos, num] of s.floatNumbersByPos) parts.push(`${pos}@${num.kindLabel}${num.number}`)
+  return parts.join(';')
 }
 
 // Convenience accessors for node views.

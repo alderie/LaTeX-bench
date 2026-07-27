@@ -2,6 +2,7 @@ import type { Node as PMNode } from 'prosemirror-model'
 import type { EditorView, NodeView, NodeViewConstructor } from 'prosemirror-view'
 import { isAlgorithmSource, renderAlgorithm } from '../renderers/algorithm'
 import { isTabularSource, renderTabular } from '../renderers/tabular'
+import { isStructuralSource, renderStructural } from '../renderers/structural'
 
 class RawLatexView implements NodeView {
   dom: HTMLElement
@@ -34,6 +35,14 @@ class RawLatexView implements NodeView {
     const source = (this.node.attrs.source as string) || ''
     if (!source) {
       this.dom.textContent = '% (empty raw block)'
+      return
+    }
+    // `\appendix` and friends: understood, but not prose. A labelled rule
+    // reads better than a box of source, and unlike the other rich
+    // renderings there's nothing here worth opening an editor for.
+    if (isStructuralSource(source)) {
+      this.dom.classList.add('raw-latex-block--rich', 'raw-latex-block--structural')
+      this.dom.appendChild(renderStructural(source))
       return
     }
     if (isTabularSource(source)) {

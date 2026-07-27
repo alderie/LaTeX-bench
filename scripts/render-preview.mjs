@@ -53,6 +53,7 @@ const wysiwyg = (name) =>
   pathToFileURL(join(root, `src/renderer/src/editor/wysiwyg/${name}`)).href
 const { isTabularSource, renderTabular } = await import(wysiwyg('renderers/tabular.ts'))
 const { isAlgorithmSource, renderAlgorithm } = await import(wysiwyg('renderers/algorithm.ts'))
+const { isStructuralSource, renderStructural } = await import(wysiwyg('renderers/structural.ts'))
 const labelRegistry = await import(wysiwyg('labelRegistry.ts'))
 const { formatNumberList, formatRefs } = await import(wysiwyg('ref-format.ts'))
 const { BUILTIN_MATH_MACROS, injectEquationTags, setMathMacros, stripMathWrappers } =
@@ -207,6 +208,9 @@ function renderBlock(node, macros) {
     }
     case 'rawLatex': {
       const source = node.attrs.source ?? ''
+      if (isStructuralSource(source)) {
+        return `<div class="raw-latex-block raw-latex-block--rich raw-latex-block--structural">${renderStructural(source).outerHTML}</div>`
+      }
       if (isTabularSource(source)) {
         return `<div class="raw-latex-block raw-latex-block--rich">${renderTabular(source).outerHTML}</div>`
       }

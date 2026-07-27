@@ -1,0 +1,179 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% A REAL .tex file as an older build of this editor left it on disk.
+%
+% This is heavy-tail-paper.tex after a save by a version whose serializer lost
+% data. It is checked in deliberately: users have files in this state, and
+% opening one must not make it worse. Every defect below is genuine damage
+% already written to disk, not something the current parser produces.
+%
+%   - `\cite{}keys`            citation arguments emptied, keys left as prose
+%   - `\begin{tabular}` with   the column spec `{@{}lccc@{}}` deleted outright
+%     no argument
+%   - `\thanks{…}` flattened   into the author line, braces gone
+%   - `\begin{abstract}`       environment dropped, body left as a paragraph
+%   - `Z\"urich` → `Zurich`    accent macros dropped
+%   - `|g||)|`                 a mangled `\verb` span
+%   - `\section*{…}` starless  and `\Cref` collapsed to `\cref`
+%
+% What we assert about it (test/parser.damaged.test.ts):
+%   1. it parses without throwing
+%   2. repairSerializerDamage folds the loose cite keys back in
+%   3. the argument-less tabular still renders as a table
+%   4. re-saving does not introduce NEW damage — it is a fixed point
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc} \usepackage[T1]{fontenc} \usepackage{lmodern} \usepackage[margin=1in]{geometry} \usepackage{microtype}
+\usepackage{amsmath, amssymb, amsthm, mathtools}
+\usepackage{booktabs} \usepackage{graphicx} \usepackage{caption} \usepackage{subcaption} \usepackage{enumitem} \usepackage{xcolor}
+\usepackage[numbers,sort&compress]{natbib} \usepackage{hyperref} \usepackage[capitalise,noabbrev]{cleveref}
+\usepackage{algorithm} \usepackage{algpseudocode}
+\usepackage{listings} \lstset{basicstyle=\ttfamily\small, breaklines=true, frame=single}
+
+\theoremstyle{plain} \newtheorem{theorem}{Theorem}[section] \newtheorem{lemma}[theorem]{Lemma}
+\theoremstyle{definition} \newtheorem{definition}[theorem]{Definition} \newtheorem{assumption}[theorem]{Assumption}
+\theoremstyle{remark} \newtheorem{remark}[theorem]{Remark} \newtheorem{example}[theorem]{Example}
+
+\DeclareMathOperator*{\argmin}{arg\,min} \DeclareMathOperator{\Tr}{Tr}
+\newcommand{\R}{\mathbb{R}} \newcommand{\E}{\mathbb{E}} \newcommand{\PP}{\mathbb{P}}
+\newcommand{\norm}[1]{\left\lVert#1\right\rVert} \newcommand{\abs}[1]{\left\lvert#1\right\rvert}
+\newcommand{\inner}[2]{\left\langle#1,#2\right\rangle} \newcommand{\set}[1]{\left\{#1\right\}}
+\newcommand{\todo}[2][red]{\textcolor{#1}{\textbf{TODO:} #2}}
+
+\title{Convergence Guarantees for Mirror Descent\\ under Heavy-Tailed Noise}
+\author{ Alex M. ReyesCorresponding author: \texttt{reyes@example.edu}. \\ Department of Statistics \\ University of Northbridge  \and  Priya R. Sundaram \\ Institute for Computational Mathematics \\ ETH Zurich }
+\date{\today}
+\begin{document}
+
+\maketitle
+
+We study mirror descent for stochastic convex optimization when the gradient noise is heavy-tailed and may have unbounded variance. We introduce a clipped variant of mirror descent and establish high-probability convergence rates of order $\mathcal{O}(T^{-(p-1)/(2p)})$ when the noise has bounded $p$-th moment for some $p \in (1, 2]$.
+
+\section{Introduction}\label{sec:intro}
+
+Stochastic optimization under heavy-tailed noise has received increasing attention in recent years~\cite{}nazin2019algorithms,gorbunov2020stochastic. Whereas the bulk of the optimization literature assumes that gradient noise is sub-Gaussian or has finite variance, heavy-tailed phenomena arise naturally in numerous applications~\cite{}cont2001empirical.
+
+Mirror descent~\cite{}nemirovski1983problem,beck2003mirror extends gradient descent to non-Euclidean geometries. Its analysis under standard noise assumptions is by now classical; see~\cite{}bubeck2015convex for a textbook treatment. Yet, as we shall see in \cref{sec:main}, the standard analysis breaks down dramatically when the noise has unbounded variance.
+
+Contributions. This paper makes three contributions:
+
+\begin{enumerate}
+  \item We propose \emph{clipped mirror descent}, a simple modification of mirror descent that clips stochastic gradients in the dual norm before applying the mirror map.
+  \item We prove high-probability convergence rates of order $\mathcal{O}(T^{-(p-1)/(2p)})$ for noise with bounded $p$-th moment, $p \in (1, 2]$ (\cref{thm:upper}).
+  \item We establish a matching lower bound (\cref{thm:lower}).
+\end{enumerate}
+
+Notation. The Bregman divergence induced by a strictly convex function $\psi$ is
+
+\begin{equation*}D_{\psi}(x, y) \coloneqq \psi(x) - \psi(y) - \inner{\nabla \psi(y)}{x - y}.\end{equation*}
+
+\section{Preliminaries}\label{sec:prelim}
+
+We consider the constrained convex optimization problem
+
+\begin{equation}\label{eq:problem}\min_{x \in \mathcal{X}}f(x), \qquad f(x) = \E_{\xi \sim \mathcal{D}}\bigl[ F(x, \xi) \bigr],\end{equation}
+
+where $\mathcal{X}\subset \R^{d}$ is closed and convex.
+
+\begin{definition}\label{def:mirror}
+A function $\psi \colon \mathcal{X}\to \R$ is a \emph{mirror map} if it is strictly convex, differentiable on the interior of $\mathcal{X}$, and $1$-strongly convex with respect to $\norm{\cdot}$.
+\end{definition}
+
+\begin{assumption}[Bounded $p$-th moment]\label{ass:moment}
+There exist $p \in (1, 2]$ and $\sigma > 0$ such that, for all $x \in \mathcal{X}$,
+
+\begin{equation*}\E\bigl[ \norm{g(x) - \nabla f(x)}_{*}^{p} \,\big|\, x \bigr] \leq \sigma^{p}.\end{equation*}
+\end{assumption}
+
+\section{Main Results}\label{sec:main}
+
+\begin{theorem}\label{thm:upper}
+Let $f$ be convex and $G$-Lipschitz in $\norm{\cdot}_{*}$, and suppose \cref{ass:moment} holds. Then with probability at least $1 - \delta$,
+
+\begin{equation}\label{eq:upper}f(\bar{x}_{T}) - f^{*} \leq C \, \sigma \, \sqrt{D_{\psi}(x^{*}, x_{1})}\, \log(1/\delta) \, T^{-(p-1)/(2p)}.\end{equation}
+\end{theorem}
+
+\begin{theorem}\label{thm:lower}
+For any $p \in (1, 2]$ and any algorithm $\mathcal{A}$ there exists a convex $1$-Lipschitz $f$ with $\E[ f(\hat{x}_{T}) - f^{*} ] \geq c \, \sigma \, T^{-(p-1)/(2p)}$.
+\end{theorem}
+
+\subsection{Geometry of the dual update}\label{sec:geometry}
+
+A useful intuition: in two dimensions, with $\psi(x) = \tfrac{1}{2}x^{\top} H x$ for positive definite $H$, the Bregman divergence reduces to a quadratic form, and the dual update of \cref{alg:cmd} becomes an affine shrinkage. Concretely, for
+
+\begin{equation*}H = \begin{pmatrix}2 & 1 \\ 1 & 2\end{pmatrix}, \qquad H^{-1}= \frac{1}{3}\begin{pmatrix}\phantom{-}2 & -1 \\ -1 & \phantom{-}2\end{pmatrix},\end{equation*}
+
+the iterate satisfies $x_{t+1}= x_{t} - \eta_{t} \, H^{-1}\hat g_{t}$ projected onto $\mathcal{X}$.
+
+\section{Numerical Experiments}\label{sec:exp}
+
+We solve $\min_{w \in \R^d}\tfrac{1}{2}\E[(\inner{w}{x}- y)^{2}]$ where $\xi$ follows a symmetric $\alpha$-stable distribution with $\alpha \in \set{1.2, 1.5, 1.8}$. Gradients have finite mean but infinite variance whenever $\alpha < 2$. Results are reported in \cref{tab:regression}.
+
+Final excess risk after $T = 10{,}000$ iterations on heavy-tailed regression. Lower is better; best per column in bold.
+
+\begin{tabular}\toprule & \multicolumn{3}{c}{Stable index $\alpha$} \\ \cmidrule(lr){2-4} Method & $1.2$ & $1.5$ & $1.8$ \\ \midrule SGD & $4.81 \pm 0.92$ & $1.73 \pm 0.31$ & $0.42 \pm 0.06$ \\ MD & $3.94 \pm 0.81$ & $1.51 \pm 0.27$ & $0.39 \pm 0.05$ \\ \textbf{CMD} & $\mathbf{0.84 \pm 0.11}$ & $\mathbf{0.46 \pm 0.07}$ & $\mathbf{0.21 \pm 0.03}$ \\ \bottomrule\end{tabular}
+
+\subsection{Convergence diagnostics}
+
+\Cref{fig:convergence} shows the empirical convergence behavior. The $x$-axis is iteration count (log scale); the $y$-axis is excess risk.
+
+\begin{figure}[htbp]
+  \centering
+  \caption{Empirical convergence on heavy-tailed regression with $\alpha = 1.5$.}
+  \label{fig:convergence}
+\end{figure}
+
+\subsection{A note on hyperparameters}
+
+A minimal reference implementation of the inner update is shown below:
+
+\begin{lstlisting}
+def cmd_step(x, g, eta, tau, mirror_prox):
+    """One clipped-mirror-descent update."""
+    g_norm = dual_norm(g)
+    g_hat  = g if g_norm <= tau else (tau / g_norm) * g
+    return mirror_prox(x, eta * g_hat)
+\end{lstlisting}
+
+\noindent
+
+The clipping rule is also expressible inline as |g||)|.
+
+\section{Discussion}\label{sec:disc}
+
+We conjecture that a tighter analysis using \cite{}howard2021time could remove the $\log(1/\delta)$ factor in \eqref{eq:upper}. Adaptivity to unknown $p$ remains open; see~\cite{}cutkosky2021highprob for related work.
+
+\section*{Acknowledgments}
+
+We thank the anonymous reviewers for helpful comments. Code is available at \href{https://example.org/heavy-tail-md}{https://example.org/heavy-tail-md} and the supplementary material at \href{https://example.org/heavy-tail-md-supp}{this link}.
+
+\appendix
+
+\section{Deferred Proofs}\label{app:proofs}
+
+The full proof of \cref{thm:upper} requires combining \cref{lem:bias} with a careful analysis of the second moment of the clipped gradient. We use the following standard identities, which hold for any $x^{*} \in \mathcal{X}$:
+
+\begin{gather}D_{\psi}(x^{*}, x_{t+1}) \leq D_{\psi}(x^{*}, x_{t}) - \eta_{t} \inner{\hat g_t}{x_t - x^*}+ \tfrac{\eta_t^2}{2}\norm{\hat g_t}_{*}^{2}, \label{eq:three-point}\\[2pt] \E\bigl[\norm{\hat g_t}_{*}^{2} \,\big|\, x_{t}\bigr] \leq \tau_{t}^{2-p}\sigma^{p} + \norm{\nabla f(x_t)}_{*}^{2}. \label{eq:second-moment}\end{gather}
+
+Summing \eqref{eq:three-point} telescopically over $t = 1, \ldots, T$ yields the rate stated in \eqref{eq:upper}.
+
+\begin{thebibliography}{99}
+\bibitem{beck2003mirror} A.~Beck and M.~Teboulle.  Mirror descent and nonlinear projected subgradient methods for convex optimization.  \emph{Operations Research Letters}, 31(3):167--175, 2003.
+
+\bibitem{bubeck2015convex} S.~Bubeck.  Convex optimization: Algorithms and complexity.  \emph{Foundations and Trends in Machine Learning}, 8(3--4):231--357, 2015.
+
+\bibitem{cont2001empirical} R.~Cont.  Empirical properties of asset returns: stylized facts and statistical issues.  \emph{Quantitative Finance}, 1(2):223--236, 2001.
+
+\bibitem{cutkosky2021highprob} A.~Cutkosky and H.~Mehta.  High-probability bounds for non-convex stochastic optimization with heavy tails.  In \emph{NeurIPS}, 2021.
+
+\bibitem{gorbunov2020stochastic} E.~Gorbunov, M.~Danilova, and A.~Gasnikov.  Stochastic optimization with heavy-tailed noise via accelerated gradient clipping.  In \emph{NeurIPS}, 2020.
+
+\bibitem{howard2021time} S.~R. Howard, A.~Ramdas, J.~McAuliffe, and J.~Sekhon.  Time-uniform, nonparametric, nonasymptotic confidence sequences.  \emph{Annals of Statistics}, 49(2):1055--1080, 2021.
+
+\bibitem{nazin2019algorithms} A.~Nazin, A.~Nemirovsky, A.~Tsybakov, and A.~Juditsky.  Algorithms of robust stochastic optimization based on mirror descent method.  \emph{Automation and Remote Control}, 80(9):1607--1627, 2019.
+
+\bibitem{nemirovski1983problem} A.~Nemirovski and D.~Yudin.  \emph{Problem Complexity and Method Efficiency in Optimization}.  Wiley, 1983.
+\end{thebibliography}
+
+\end{document}

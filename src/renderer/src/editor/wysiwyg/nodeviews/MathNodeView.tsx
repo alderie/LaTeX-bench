@@ -114,6 +114,52 @@ class MathView implements NodeView {
     }
     this.editor = el
     this.dom.appendChild(el)
+
+    // Live preview. Editing a formula blind — type LaTeX, blur, look, fix,
+    // re-open — is the slowest loop in the editor. Rendering as the author
+    // types collapses it to one pass. Block math gets the preview; inline
+    // math is small enough that the surrounding line is the preview.
+    let preview: HTMLElement | null = null
+    if (this.displayMode) {
+      preview = document.createElement('div')
+      preview.className = 'math-preview'
+      this.dom.appendChild(preview)
+      const paint = (): void => {
+        if (!preview) return
+        const source = stripMathWrappers(el.value).trim()
+        preview.classList.remove('math-preview--error')
+        if (source === '') {
+          preview.textContent = ''
+          return
+        }
+        try {
+          katex.render(source, preview, {
+            throwOnError: true,
+            displayMode: true,
+            strict: false,
+            macros: getMathMacros()
+          })
+        } catch (err) {
+          // KaTeX's message names the offending token, which is exactly
+          // what an author needs mid-formula.
+          preview.classList.add('math-preview--error')
+          preview.textContent = (err as Error).message
+        }
+      }
+      // Coalesce to one render per frame: KaTeX on a large `align` is
+      // expensive enough that per-keystroke rendering stutters.
+      let queued = false
+      const schedulePaint = (): void => {
+        if (queued) return
+        queued = true
+        requestAnimationFrame(() => {
+          queued = false
+          paint()
+        })
+      }
+      el.addEventListener('input', schedulePaint)
+      paint()
+    }
     requestAnimationFrame(() => {
       el.focus()
       // Place caret at end so the user is ready to extend the formula.
@@ -129,6 +175,8 @@ class MathView implements NodeView {
     const commit = (): void => {
       const next = el.value
       this.editing = false
+      preview?.remove()
+      preview = null
       const pos = this.getPos()
       if (typeof pos === 'number' && next !== this.node.attrs.latex) {
         const tr = this.view.state.tr.setNodeMarkup(pos, undefined, {
@@ -143,6 +191,8 @@ class MathView implements NodeView {
 
     const cancel = (): void => {
       this.editing = false
+      preview?.remove()
+      preview = null
       this.render()
     }
 
@@ -160,6 +210,14 @@ class MathView implements NodeView {
       } else if (e.key === 'Enter' && !this.displayMode) {
         e.preventDefault()
         el.blur()
+      } else if (e.key === 'Tab' && this.displayMode) {
+        // Inside a matrix or align body, Tab means "next cell". Leaving the
+        // field is what a browser does by default and is never what the
+        // author wants here — the surrounding editor is one keystroke away
+        // via Escape.
+        e.preventDefault()
+        insertAtCursor(el as HTMLTextAreaElement, e.shiftKey ? ' \\\\\n  ' : ' & ')
+        el.dispatchEvent(new Event('input'))
       }
     })
   }
@@ -185,6 +243,16 @@ class MathView implements NodeView {
     this.unsubscribe?.()
     this.unsubscribe = null
   }
+}
+
+// Splice text at the caret of a textarea. Used by the Tab handler to move
+// between matrix / align cells.
+function insertAtCursor(el: HTMLTextAreaElement, text: string): void {
+  const start = el.selectionStart ?? el.value.length
+  const end = el.selectionEnd ?? start
+  el.value = el.value.slice(0, start) + text + el.value.slice(end)
+  const caret = start + text.length
+  el.setSelectionRange(caret, caret)
 }
 
 function stripWrappers(latex: string, displayMode: boolean): string {

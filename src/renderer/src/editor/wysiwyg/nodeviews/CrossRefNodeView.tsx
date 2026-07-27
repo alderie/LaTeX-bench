@@ -1,5 +1,6 @@
 import type { Node as PMNode } from 'prosemirror-model'
 import type { NodeView, NodeViewConstructor } from 'prosemirror-view'
+import { attachAnchorNavigation } from '../anchor-nav'
 import { getLabel, subscribe } from '../labelRegistry'
 import { formatRefs } from '../ref-format'
 
@@ -11,6 +12,8 @@ class CrossRefView implements NodeView {
     this.dom = document.createElement('a')
     this.dom.className = 'cross-ref'
     this.dom.contentEditable = 'false'
+    // Resolved lazily: the target moves as the document is edited.
+    attachAnchorNavigation(this.dom, () => this.dom.getAttribute('href')?.slice(1) ?? null)
     this.render()
     // Re-render whenever the registry rebuilds — section/theorem
     // numbering can shift around in response to edits elsewhere.

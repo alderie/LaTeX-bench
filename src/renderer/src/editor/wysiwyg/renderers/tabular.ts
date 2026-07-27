@@ -49,10 +49,14 @@ function splitTabularSource(source: string): TabularSource | null {
     if (openMark === '{') groups.push(text.slice(i + 1, j))
     i = j + 1
   }
-  if (groups.length === 0) return null
+  // No column spec at all. That's malformed LaTeX — but files in the wild
+  // are in exactly this state (an older build of this editor deleted the
+  // spec on save), and refusing to render leaves the user staring at a wall
+  // of `&` and `\\`. Render it anyway and let the column count fall out of
+  // the rows themselves.
   return {
     env,
-    colSpec: groups[groups.length - 1],
+    colSpec: groups.length > 0 ? groups[groups.length - 1] : '',
     body: text.slice(i, text.length - close.length)
   }
 }

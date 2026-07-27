@@ -9,6 +9,8 @@ import { useUiStore } from '../stores/uiStore'
 //   Ctrl/Cmd + F  → find bar
 //   Ctrl/Cmd + \  → symbol palette
 //   Ctrl/Cmd + S  → flush save now (in case the user wants a clean state)
+//   Ctrl/Cmd + =/-  → zoom the paper view in / out
+//   Ctrl/Cmd + 0  → reset zoom to 100%
 //
 // CodeMirror-scoped shortcuts (history, search, defaultKeymap) live in
 // SourceEditor; we only handle window-level ones here so they fire even
@@ -49,6 +51,24 @@ export function useShortcuts(): void {
         e.preventDefault()
         const ui = useUiStore.getState()
         ui.setFindBarOpen(!ui.findBarOpen)
+        return
+      }
+
+      // Zoom. `+` needs Shift on most layouts, so accept both the shifted
+      // and unshifted glyph, plus the numpad names the browser reports.
+      if (key === '=' || key === '+' || e.code === 'NumpadAdd') {
+        e.preventDefault()
+        useUiStore.getState().stepZoom(1)
+        return
+      }
+      if (key === '-' || key === '_' || e.code === 'NumpadSubtract') {
+        e.preventDefault()
+        useUiStore.getState().stepZoom(-1)
+        return
+      }
+      if (key === '0') {
+        e.preventDefault()
+        useUiStore.getState().resetZoom()
         return
       }
 

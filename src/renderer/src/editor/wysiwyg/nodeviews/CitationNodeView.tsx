@@ -1,5 +1,6 @@
 import type { Node as PMNode } from 'prosemirror-model'
 import type { NodeView, NodeViewConstructor } from 'prosemirror-view'
+import { attachAnchorNavigation } from '../anchor-nav'
 import { formatNumberList } from '../ref-format'
 import { getCitation, subscribe } from '../labelRegistry'
 
@@ -11,6 +12,8 @@ class CitationView implements NodeView {
     this.dom = document.createElement('a')
     this.dom.className = 'citation'
     this.dom.contentEditable = 'false'
+    // Resolved lazily: the target moves as the document is edited.
+    attachAnchorNavigation(this.dom, () => this.dom.getAttribute('href')?.slice(1) ?? null)
     this.render()
     this.unsubscribe = subscribe(() => this.render())
   }

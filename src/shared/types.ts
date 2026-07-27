@@ -120,6 +120,13 @@ export interface PaperAPI {
   writeTex: (paperId: string, tex: string) => Promise<void>
   readBib: (paperId: string) => Promise<string>
   writeBib: (paperId: string, bib: string) => Promise<void>
+  /** Read a paper-relative `.tex` — the files `\input`/`\include` pull in. */
+  readTexFile: (paperId: string, relPath: string) => Promise<string>
+  writeTexFile: (paperId: string, relPath: string, tex: string) => Promise<void>
+  /** Whether a paper-relative `.tex` exists inside the paper's folder. */
+  texFileExists: (paperId: string, relPath: string) => Promise<boolean>
+  /** Every `.tex` in the paper folder, paper-relative. */
+  listTexFiles: (paperId: string) => Promise<string[]>
   getSettings: (paperId: string) => Promise<PaperSettings>
   saveSettings: (paperId: string, settings: PaperSettings) => Promise<void>
   onChanged: (cb: (paperId: string) => void) => () => void

@@ -14,6 +14,17 @@ export interface SourcePosition {
   head: number
 }
 
+/**
+ * The storage key for one file of one paper.
+ *
+ * Per file rather than per paper: a paper split across a dozen `\input`ed
+ * sections has a dozen places you were, and coming back to `method.tex` at
+ * the line you left `results.tex` on is worse than not remembering at all.
+ */
+export function positionKey(paperId: string, file: string): string {
+  return `${paperId}::${file}`
+}
+
 export function readSourcePosition(paperId: string): SourcePosition | null {
   try {
     const raw = localStorage.getItem(PREFIX + paperId)

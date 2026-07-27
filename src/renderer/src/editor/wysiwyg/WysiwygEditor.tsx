@@ -33,6 +33,9 @@ export function WysiwygEditor(): React.JSX.Element {
   // Kept so unmount can flush a pending save rather than dropping it.
   const syncRef = useRef<DeferredSync | null>(null)
   const paperId = usePaperStore((s) => s.paperId)
+  // The rich view is built from one file's source, so swapping which file is
+  // active has to rebuild it — the same as swapping papers.
+  const activeFile = usePaperStore((s) => s.activeFile)
   const setTex = usePaperStore((s) => s.setTex)
   // Load happens async — keep an effect-local cancel flag.
   useEffect(() => {
@@ -142,7 +145,7 @@ export function WysiwygEditor(): React.JSX.Element {
       viewRef.current = null
       host.replaceChildren()
     }
-  }, [paperId, setTex])
+  }, [paperId, activeFile, setTex])
 
   return <div ref={hostRef} className="wysiwyg-editor" />
 }

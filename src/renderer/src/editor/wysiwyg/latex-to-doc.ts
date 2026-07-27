@@ -576,8 +576,12 @@ export async function parseLatexToDoc(input: string): Promise<ParseResult> {
 
   // Build the PM doc. Top-level always starts with a hidden preamble node so
   // the round-trip can reattach it on serialize.
+  // No `\begin{document}` means this isn't a whole paper — it's one of the
+  // files the paper `\input`s. Recorded on the preamble node so serializing
+  // gives the fragment back rather than promoting it to a document.
+  const isFragment = docStart < 0
   const docContent: PMNode[] = [
-    latexSchema.nodes.preamble.create({ source: preambleText })
+    latexSchema.nodes.preamble.create({ source: preambleText, fragment: isFragment })
   ]
   if (blocks.length === 0) {
     docContent.push(latexSchema.nodes.paragraph.create())

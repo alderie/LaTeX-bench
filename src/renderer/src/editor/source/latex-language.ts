@@ -19,6 +19,8 @@ import type { Completion, CompletionContext, CompletionResult } from '@codemirro
 import { EditorView } from '@codemirror/view'
 import type { EditorState, Extension, Text } from '@codemirror/state'
 import { catalogueEntries } from '../wysiwyg/math-complete'
+import { SECTION_MACRO_PATTERN, SECTION_RANK } from '../sections'
+import { getBibEntries } from '../bibliography'
 
 /** Environments worth offering before the author has typed anything. */
 const COMMON_ENVIRONMENTS = [
@@ -87,7 +89,12 @@ export const latexLanguageData = latexLanguage.data.of({
 // ── Folding ────────────────────────────────────────────────────────────
 
 const BEGIN_RE = /\\begin\{([^}]*)\}/
-const SECTION_RE = /^\s*\\(part|chapter|section|subsection|subsubsection)\*?\s*\{/
+// Shares its macro list and ranking with the outline (see `sections.ts`), so
+// the fold service and the jump list can't drift apart about what a heading
+// is. The optional group is `\section[Short]{Full}`'s running-head argument.
+const SECTION_RE = new RegExp(
+  `^\\s*\\\\(${SECTION_MACRO_PATTERN})\\*?\\s*(?:\\[[^\\]]*\\])?\\s*\\{`
+)
 
 /**
  * Fold an environment onto its `\begin` line, and a section onto its heading.
@@ -151,14 +158,6 @@ function computeFold(
   return last.to > lineEnd ? { from: lineEnd, to: last.to } : null
 }
 
-const SECTION_RANK: Record<string, number> = {
-  part: 0,
-  chapter: 1,
-  section: 2,
-  subsection: 3,
-  subsubsection: 4
-}
-
 // ── Completion ─────────────────────────────────────────────────────────
 
 /**
@@ -208,6 +207,67 @@ function indexDocument(doc: Text): DocumentIndex {
   return index
 }
 
+function labelOptions(labels: string[]): Completion[] {
+  return labels.map((key) => ({
+    label: key,
+    type: 'variable',
+    detail: 'label'
+  }))
+}
+
+/**
+ * Keys for `\cite{`, from both places a paper can define them.
+ *
+ * `\bibitem`s are in the document; the rest are in `references.bib`, which is
+ * how nearly every real paper does it. Only the in-document ones used to be
+ * offered, so on a normal BibTeX workflow this completion was empty.
+ *
+ * The `.bib` entry carries enough to identify the work, so the row shows
+ * "Tsallis et al., 1988 · Possible generalization… · J. Stat. Phys." rather
+ * than a bare key you have to already know.
+ */
+export function citeOptions(bibitemKeys: string[], query: string): Completion[] {
+  const seen = new Set(bibitemKeys)
+  const candidates: Array<{ option: Completion; haystack: string; fromBib: boolean }> =
+    bibitemKeys.map((key) => ({
+      option: { label: key, type: 'constant', detail: 'bibitem' },
+      haystack: key.toLowerCase(),
+      fromBib: false
+    }))
+
+  for (const entry of getBibEntries()) {
+    if (seen.has(entry.key)) continue
+    seen.add(entry.key)
+    candidates.push({
+      option: {
+        label: entry.key,
+        type: 'constant',
+        detail: entry.summary || entry.type
+      },
+      haystack: `${entry.key} ${entry.authors.join(' ')} ${entry.title} ${entry.year} ${entry.venue}`.toLowerCase(),
+      fromBib: true
+    })
+  }
+
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
+  const matched = terms.length
+    ? candidates.filter((c) => terms.every((term) => c.haystack.includes(term)))
+    : candidates
+
+  // A key that starts with what was typed is what the author meant; the
+  // title and author words are the fallback that makes the search useful.
+  const head = query.toLowerCase()
+  return matched
+    .slice()
+    .sort((a, b) => {
+      const aPrefix = a.option.label.toLowerCase().startsWith(head) ? 0 : 1
+      const bPrefix = b.option.label.toLowerCase().startsWith(head) ? 0 : 1
+      if (aPrefix !== bPrefix) return aPrefix - bPrefix
+      return a.option.label.localeCompare(b.option.label)
+    })
+    .map((c) => c.option)
+}
+
 const MACRO_COMPLETIONS: Completion[] = catalogueEntries().map((entry) => ({
   label: entry.name,
   type: 'function',
@@ -240,13 +300,22 @@ export function latexCompletions(context: CompletionContext): CompletionResult |
     if (kind) {
       const typed = keyed.text.slice(keyed.text.lastIndexOf('{') + 1)
       const index = indexDocument(context.state.doc)
+      // `\cite{` takes the last key of a comma-separated list: in
+      // `\cite{a,b` the thing being completed is `b`.
+      const partial = kind === 'cite' ? typed.slice(typed.lastIndexOf(',') + 1) : typed
+      if (kind === 'cite') {
+        return {
+          from: keyed.to - partial.length,
+          options: citeOptions(index.cites, partial.trim()),
+          // Filtered here rather than by CodeMirror, because the useful
+          // query is "the Tsallis entropy one" — a word from the title or an
+          // author's name — and CodeMirror can only match the key.
+          filter: false
+        }
+      }
       return {
-        from: keyed.to - typed.length,
-        options: (kind === 'cite' ? index.cites : index.labels).map((key) => ({
-          label: key,
-          type: kind === 'cite' ? 'constant' : 'variable',
-          detail: kind === 'cite' ? 'bibitem' : 'label'
-        })),
+        from: keyed.to - partial.length,
+        options: labelOptions(index.labels),
         validFor: /^[^}]*$/
       }
     }

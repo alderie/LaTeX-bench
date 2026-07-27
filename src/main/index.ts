@@ -217,6 +217,24 @@ app.whenReady().then(async () => {
     storeManager!.writeBib(paperId, bib)
   )
 
+  ipcMain.handle('paper:readTexFile', async (_, paperId: string, relPath: string) =>
+    storeManager!.readTexFile(paperId, relPath)
+  )
+
+  ipcMain.handle(
+    'paper:writeTexFile',
+    async (_, paperId: string, relPath: string, tex: string) =>
+      storeManager!.writeTexFile(paperId, relPath, tex)
+  )
+
+  ipcMain.handle('paper:texFileExists', async (_, paperId: string, relPath: string) =>
+    storeManager!.texFileExists(paperId, relPath)
+  )
+
+  ipcMain.handle('paper:listTexFiles', async (_, paperId: string) =>
+    storeManager!.listTexFiles(paperId)
+  )
+
   ipcMain.handle('paper:getSettings', async (_, paperId: string) =>
     storeManager!.getSettings(paperId)
   )

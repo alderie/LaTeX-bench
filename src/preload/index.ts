@@ -25,6 +25,13 @@ const paperAPI: PaperAPI = {
   writeTex: (paperId: string, tex: string) => ipcRenderer.invoke('paper:writeTex', paperId, tex),
   readBib: (paperId: string) => ipcRenderer.invoke('paper:readBib', paperId),
   writeBib: (paperId: string, bib: string) => ipcRenderer.invoke('paper:writeBib', paperId, bib),
+  readTexFile: (paperId: string, relPath: string) =>
+    ipcRenderer.invoke('paper:readTexFile', paperId, relPath),
+  writeTexFile: (paperId: string, relPath: string, tex: string) =>
+    ipcRenderer.invoke('paper:writeTexFile', paperId, relPath, tex),
+  texFileExists: (paperId: string, relPath: string) =>
+    ipcRenderer.invoke('paper:texFileExists', paperId, relPath),
+  listTexFiles: (paperId: string) => ipcRenderer.invoke('paper:listTexFiles', paperId),
   getSettings: (paperId: string) => ipcRenderer.invoke('paper:getSettings', paperId),
   saveSettings: (paperId: string, settings: PaperSettings) =>
     ipcRenderer.invoke('paper:saveSettings', paperId, settings),

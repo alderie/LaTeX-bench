@@ -1,4 +1,5 @@
 import { Node as PMNode } from 'prosemirror-model'
+import { getBibEntry, subscribeBibliography } from '../bibliography'
 
 // A document-wide registry of label → resolved cross-reference text plus
 // per-mathBlock equation numbers. Rebuilt from scratch on every doc
@@ -38,6 +39,13 @@ export interface ResolvedCitation {
   // Falls back to "[N]" when we can't extract a sensible author/year.
   shortLabel: string
   domAnchor: string
+  // Where the entry came from. A `bibitem` is in the document and can be
+  // scrolled to; a `bib` entry lives in references.bib and has nothing on
+  // the page to link at, so the chip resolves but isn't a link.
+  source: 'bibitem' | 'bib'
+  // One line of "who, what, where" for the chip's tooltip. Empty for
+  // bibitems, whose prose is already the reference.
+  summary: string
 }
 
 export interface RegistryState {
@@ -494,12 +502,52 @@ function walkBibitem(ctx: BuildContext, node: PMNode): void {
   // Try to derive a short author/year label by reading the first text run
   // of the bibitem. Conservative: if we can't pull out a clear author, we
   // fall back to "[N]".
-  const shortLabel = deriveCitationShortLabel(node) ?? `[${number}]`
+  // The `.bib` entry, when there is one, knows the authors and year as data
+  // rather than as prose to guess at — prefer it over the heuristic.
+  const fromBib = getBibEntry(key)
+  const shortLabel = fromBib?.shortLabel ?? deriveCitationShortLabel(node) ?? `[${number}]`
   ctx.citations.set(key, {
     number,
     shortLabel,
-    domAnchor: citeAnchorFor(key)
+    domAnchor: citeAnchorFor(key),
+    source: 'bibitem',
+    summary: fromBib?.summary ?? ''
   })
+}
+
+/**
+ * Resolve the cite keys the document uses but doesn't define inline.
+ *
+ * A paper with `\bibliography{references}` has no `\bibitem`s at all — the
+ * keys live in the `.bib`. Numbering them in order of first citation is what
+ * `unsrt` does, and is the only order we can know without running BibTeX.
+ */
+function registerBibliographyCitations(ctx: BuildContext, doc: PMNode): void {
+  const ordered: string[] = []
+  const seen = new Set<string>()
+  doc.descendants((node) => {
+    if (node.type.name !== 'citation') return true
+    for (const key of (node.attrs.keys as string[] | undefined) ?? []) {
+      if (seen.has(key)) continue
+      seen.add(key)
+      ordered.push(key)
+    }
+    return false
+  })
+
+  let counter = ctx.bibitemCounter
+  for (const key of ordered) {
+    if (ctx.citations.has(key)) continue
+    const entry = getBibEntry(key)
+    if (!entry) continue
+    ctx.citations.set(key, {
+      number: ++counter,
+      shortLabel: entry.shortLabel,
+      domAnchor: citeAnchorFor(key),
+      source: 'bib',
+      summary: entry.summary
+    })
+  }
 }
 
 function deriveCitationShortLabel(bibitem: PMNode): string | null {
@@ -582,6 +630,7 @@ function walkBlock(ctx: BuildContext, node: PMNode, parentNumber: string): void 
 }
 
 export function rebuild(doc: PMNode): void {
+  lastDoc = doc
   const ctx = makeContext()
 
   // First pass for non-math blocks (sections, theorems, figures). They
@@ -614,6 +663,10 @@ export function rebuild(doc: PMNode): void {
     return true
   })
 
+  // After the bibitems have taken their numbers, so a key defined both ways
+  // keeps its document-order position.
+  registerBibliographyCitations(ctx, doc)
+
   state = {
     byKey: ctx.byKey,
     citations: ctx.citations,
@@ -637,13 +690,25 @@ export function rebuild(doc: PMNode): void {
 
 let lastSignature = ''
 
+// The document the registry currently describes, so a bibliography that
+// finishes parsing after the paper has loaded — the normal order, since the
+// `.bib` parse is async — can re-resolve the citations that were unknown at
+// the time without waiting for the next keystroke.
+let lastDoc: PMNode | null = null
+
+subscribeBibliography(() => {
+  if (lastDoc) rebuild(lastDoc)
+})
+
 // Cheap structural fingerprint of everything a subscriber can observe.
 // Positions are included because a node view looks its numbering up *by*
 // position, so a pure position shift still has to reach it.
 function signatureOf(s: RegistryState): string {
   const parts: string[] = []
   for (const [key, ref] of s.byKey) parts.push(`${key}=${ref.pretty}`)
-  for (const [key, cite] of s.citations) parts.push(`${key}#${cite.number}`)
+  // The label is in the signature, not just the number: when the `.bib`
+  // finishes parsing it can improve a bibitem's label without moving it.
+  for (const [key, cite] of s.citations) parts.push(`${key}#${cite.number}~${cite.shortLabel}`)
   for (const [pos, tags] of s.equationNumbersByPos) parts.push(`${pos}:${tags.join('|')}`)
   for (const [pos, num] of s.floatNumbersByPos) parts.push(`${pos}@${num.kindLabel}${num.number}`)
   return parts.join(';')

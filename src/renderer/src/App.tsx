@@ -2,12 +2,14 @@ import './App.css'
 import * as React from 'react'
 import { useEffect } from 'react'
 import { PaperWorkspace } from './components/PaperWorkspace'
+import { useBibliography } from './hooks/useBibliography'
 import { useBuild } from './hooks/useBuild'
 import { useShortcuts } from './hooks/useShortcuts'
 import { useZoomGesture } from './hooks/useZoomGesture'
 
 export default function App(): React.JSX.Element {
   useBuild()
+  useBibliography()
   useShortcuts()
   useZoomGesture()
 

@@ -70,9 +70,10 @@ import {
   headingLines,
   type Heading
 } from './fold-commands'
+import { headingTitle } from '../sections'
 import { notifySourceUpdate, setActiveSourceView } from './source-bridge'
 import { SourceMinimap } from './SourceMinimap'
-import { readSourcePosition, writeSourcePosition } from './source-position'
+import { positionKey, readSourcePosition, writeSourcePosition } from './source-position'
 
 // The LaTeX source view.
 //
@@ -273,8 +274,6 @@ interface DocStats {
 
 const NO_STATS: DocStats = { words: 0, folded: 0, headings: [] }
 
-const HEADING_TITLE_RE = /\{(.*)\}\s*$/
-
 function countWords(text: string): number {
   // Macros and their braces are markup, not prose: `\section{Results}` is one
   // word. Stripping them first is the difference between a word count and a
@@ -292,6 +291,7 @@ export function SourceEditor(): React.JSX.Element {
   const viewRef = useRef<EditorView | null>(null)
   const externalCompartment = useRef(new Compartment()).current
   const paperId = usePaperStore((s) => s.paperId)
+  const activeFile = usePaperStore((s) => s.activeFile)
   const setTex = usePaperStore((s) => s.setTex)
   const minimapOpen = useUiStore((s) => s.minimapOpen)
   const toggleMinimap = useUiStore((s) => s.toggleMinimap)
@@ -310,10 +310,10 @@ export function SourceEditor(): React.JSX.Element {
     // stale is indistinguishable from one that is current.
     let statsTimer: ReturnType<typeof setTimeout> | null = null
     const recomputeStats = (state: EditorState): void => {
-      const headings = headingLines(state).map((heading) => {
-        const text = state.doc.line(heading.line).text
-        return { ...heading, title: HEADING_TITLE_RE.exec(text)?.[1] ?? '' }
-      })
+      const headings = headingLines(state).map((heading) => ({
+        ...heading,
+        title: headingTitle(state.doc.line(heading.line).text)
+      }))
       setStats({
         words: countWords(state.doc.toString()),
         folded: countFolded(state),
@@ -470,7 +470,7 @@ export function SourceEditor(): React.JSX.Element {
     // Reopening a paper puts you back where you stopped writing, rather than
     // at line 1 of a file you were 800 lines into.
     if (paperId) {
-      const saved = readSourcePosition(paperId)
+      const saved = readSourcePosition(positionKey(paperId, activeFile))
       if (saved && saved.anchor <= current.state.doc.length) {
         current.dispatch({
           selection: { anchor: saved.anchor, head: saved.head },
@@ -488,14 +488,15 @@ export function SourceEditor(): React.JSX.Element {
     })
 
     const id = paperId
+    const file = activeFile
     return () => {
       unsubscribe()
       if (id && viewRef.current) {
         const { main } = viewRef.current.state.selection
-        writeSourcePosition(id, { anchor: main.anchor, head: main.head })
+        writeSourcePosition(positionKey(id, file), { anchor: main.anchor, head: main.head })
       }
     }
-  }, [paperId])
+  }, [paperId, activeFile])
 
   const run = useCallback((command: Command): void => {
     const target = viewRef.current

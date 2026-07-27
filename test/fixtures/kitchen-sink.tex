@@ -1,0 +1,308 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% kitchen-sink.tex — the parser/WYSIWYG conformance fixture.
+%
+% Unlike heavy-tail-paper.tex (a realistic paper), this file is a deliberate
+% torture test: every construct here is one the WYSIWYG view has to survive
+% without dropping, reordering, or rewriting. Anything that regresses shows up
+% as a failing assertion in test/parser.kitchen-sink.test.ts or as drift in
+% test/roundtrip.stability.test.ts.
+%
+% Compiles with pdflatex (three passes for cleveref/toc).
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\documentclass[11pt,twoside]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath, amssymb, amsthm, mathtools}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{natbib}
+\usepackage{hyperref}
+\usepackage[capitalise]{cleveref}
+
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{definition}[theorem]{Definition}
+
+\DeclareMathOperator{\Tr}{Tr}
+\DeclareMathOperator*{\argmin}{arg\,min}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\norm}[1]{\left\lVert#1\right\rVert}
+
+\title{A Conformance Suite for \LaTeX{} Round-Tripping}
+\author{Dana Ortiz\thanks{Thanks to the reviewers.} \and Ren\'{e} M\"{u}ller}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document exercises constructs that a WYSIWYG editor must round-trip
+byte-for-byte: tabular material, nested lists, multi-line math with per-line
+labels, verbatim text, accents, and escaped characters.
+\end{abstract}
+
+\tableofcontents
+
+\section{Escapes and Text-Mode Typography}
+\label{sec:escapes}
+
+Reserved characters must survive unchanged: 100\% of \$5 costs \#1 in the
+Smith \& Jones catalogue, filed under \texttt{report\_final}, with braces
+\{like this\} and a literal backslash \textbackslash{} plus a tilde
+\textasciitilde{} and caret \textasciicircum{} for good measure.
+
+Ligature-sensitive punctuation: an em-dash---like so---and an en-dash 3--7,
+with ``curly quotes'' and `single quotes' around them. A non-breaking
+space appears in \cref{sec:escapes}~and Table~\ref{tab:results}.
+
+Accented text set with commands: Ren\'{e}, M\"{u}ller, Fran\c{c}ois,
+\AA{}ngstr\"{o}m, Erd\H{o}s, \O{}rsted, stra\ss{}e, na\"{\i}ve. And the same
+words typed as literal UTF-8: René, Müller, François, Ångström.
+
+Text-mode super/subscripts: the 3\textsuperscript{rd} entry of
+H\textsubscript{2}O, and inline verbatim like \verb|x <- y| or
+\verb+a & b+ that must not be interpreted.
+
+\section{Mathematics}
+\label{sec:math}
+
+Inline math $\norm{x}_2 \le \sqrt{d}\,\norm{x}_\infty$ sits in running text,
+as does $\Tr(A) = \sum_i A_{ii}$ and the operator $\argmin_{x \in \R^d} f(x)$.
+
+A numbered equation with a label:
+\begin{equation}
+  \label{eq:objective}
+  f(x) = \tfrac{1}{2}\norm{Ax - b}^2 + \lambda \norm{x}_1 .
+\end{equation}
+
+Grouped equations that share a number, each line separately labelled:
+\begin{subequations}
+  \label{eq:system}
+  \begin{align}
+    \dot{x} &= \sigma (y - x),          \label{eq:lorenz-x} \\
+    \dot{y} &= x(\rho - z) - y,         \label{eq:lorenz-y} \\
+    \dot{z} &= xy - \beta z .           \label{eq:lorenz-z}
+  \end{align}
+\end{subequations}
+
+A case analysis and a matrix, both inside a display:
+\begin{equation}
+  \label{eq:cases}
+  \operatorname{sgn}(t) =
+  \begin{cases}
+    +1 & t > 0, \\
+     0 & t = 0, \\
+    -1 & t < 0,
+  \end{cases}
+  \qquad
+  M = \begin{pmatrix}
+    1 & 0 \\
+    0 & 1
+  \end{pmatrix}.
+\end{equation}
+
+Alignment across three columns with \texttt{alignat}, plus a \texttt{gather}:
+\begin{alignat}{2}
+  a &= b + c    &\quad& \text{(definition)} \label{eq:alignat-1} \\
+  d &= e - f    &&      \text{(consequence)} \label{eq:alignat-2}
+\end{alignat}
+
+\begin{gather*}
+  p + q = r \\
+  s + t = u
+\end{gather*}
+
+An unnumbered display with \verb|\[ ... \]|: \[ \int_0^\infty e^{-x^2}\,dx =
+\frac{\sqrt{\pi}}{2}. \]
+
+By \cref{eq:objective,eq:cases} and \eqref{eq:lorenz-y} the claim follows; see
+also \autoref{sec:math} and page~\pageref{sec:tables}.
+
+\section{Tables}
+\label{sec:tables}
+
+\begin{table}[htbp]
+  \centering
+  \caption[Short caption for the list of tables]{Booktabs table with a
+  multi-column header and a multi-row stub.}
+  \label{tab:results}
+  \begin{tabular}{@{}llrr@{}}
+    \toprule
+    \multirow{2}{*}{Method} & \multicolumn{3}{c}{Benchmark} \\
+    \cmidrule(l){2-4}
+                            & Split & Error (\%) & Time (s) \\
+    \midrule
+    Baseline                & dev   & 12.4       & 0.81 \\
+                            & test  & 13.1       & 0.79 \\
+    Ours                    & dev   & \textbf{9.2} & 1.04 \\
+                            & test  & \textbf{9.8} & 1.02 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+A table with vertical rules and an inline math cell:
+
+\begin{table}[t]
+  \centering
+  \begin{tabular}{|l|c|}
+    \hline
+    Symbol & Meaning \\
+    \hline
+    $\R^d$      & Euclidean space \\
+    $\norm{\cdot}$ & A norm on $\R^d$ \\
+    \hline
+  \end{tabular}
+  \caption{Notation.}
+  \label{tab:notation}
+\end{table}
+
+\section{Figures}
+\label{sec:figures}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.6\linewidth]{plots/convergence.pdf}
+  \caption{A single-image figure.}
+  \label{fig:convergence}
+\end{figure}
+
+\begin{figure}[t]
+  \centering
+  \begin{subfigure}[b]{0.45\linewidth}
+    \centering
+    \includegraphics[width=\linewidth]{plots/left.pdf}
+    \caption{Left panel.}
+    \label{fig:left}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[b]{0.45\linewidth}
+    \centering
+    \includegraphics[width=\linewidth]{plots/right.pdf}
+    \caption{Right panel.}
+    \label{fig:right}
+  \end{subfigure}
+  \caption{Two panels side by side.}
+  \label{fig:panels}
+\end{figure}
+
+\section{Lists}
+\label{sec:lists}
+
+Nested lists have to keep their nesting:
+
+\begin{enumerate}[label=(\roman*)]
+  \item A first outer item.
+  \item A second outer item with an inner list:
+    \begin{itemize}
+      \item An inner bullet.
+      \item Another inner bullet, with \emph{emphasis} and $x^2$.
+    \end{itemize}
+  \item A third outer item.
+\end{enumerate}
+
+A description list:
+
+\begin{description}
+  \item[Convex] The epigraph is a convex set.
+  \item[Smooth] The gradient is Lipschitz.
+\end{description}
+
+A multi-paragraph list item:
+
+\begin{itemize}
+  \item First paragraph of the item.
+
+    Second paragraph of the same item.
+  \item A short item.
+\end{itemize}
+
+\section{Theorems and Proofs}
+\label{sec:theorems}
+
+\begin{definition}[Strong convexity]
+  \label{def:strong}
+  A function $f$ is $\mu$-strongly convex if $f - \tfrac{\mu}{2}\norm{\cdot}^2$
+  is convex.
+\end{definition}
+
+\begin{theorem}[Convergence rate]
+  \label{thm:rate}
+  Let $f$ satisfy \cref{def:strong}. Then
+  \begin{equation}
+    \label{eq:rate}
+    f(x_T) - f^\star \le \frac{C}{T} .
+  \end{equation}
+\end{theorem}
+
+\begin{proof}
+  Combine \eqref{eq:objective} with the descent lemma. The remaining steps are
+  standard \citep{boyd2004convex}.
+\end{proof}
+
+\section{Verbatim and Listings}
+\label{sec:code}
+
+\begin{verbatim}
+def f(x):
+    # a comment with $math$ and \backslash
+    return x ** 2
+\end{verbatim}
+
+\begin{lstlisting}[language=Python,caption={A listing}]
+for i in range(10):
+    print(i)   # 100% literal
+\end{lstlisting}
+
+\section{Citations and Notes}
+\label{sec:cites}
+
+Standard forms: \cite{knuth1984texbook}, \citep{boyd2004convex},
+\citet{nesterov2018lectures}, and a page-qualified
+\citep[see][p.~42]{boyd2004convex}. Multiple keys collapse:
+\citep{boyd2004convex,nesterov2018lectures}.
+
+A footnote with structure inside it.\footnote{Footnotes may contain math like
+$e^{i\pi} + 1 = 0$ and citations~\citep{knuth1984texbook}.}
+
+\appendix
+
+\section{Deferred Proofs}
+\label{app:proofs}
+
+\begin{lemma}
+  \label{lem:aux}
+  An auxiliary bound.
+\end{lemma}
+
+The appendix section is lettered, so \cref{app:proofs} renders as ``Appendix A''.
+
+\begin{thebibliography}{9}
+
+\bibitem{boyd2004convex}
+S.~Boyd and L.~Vandenberghe.
+\newblock \emph{Convex Optimization}.
+\newblock Cambridge University Press, 2004.
+
+\bibitem{knuth1984texbook}
+D.~E. Knuth.
+\newblock \emph{The \TeX{}book}.
+\newblock Addison-Wesley, 1984.
+
+\bibitem{nesterov2018lectures}
+Y.~Nesterov.
+\newblock \emph{Lectures on Convex Optimization}.
+\newblock Springer, 2018.
+
+\end{thebibliography}
+
+\end{document}

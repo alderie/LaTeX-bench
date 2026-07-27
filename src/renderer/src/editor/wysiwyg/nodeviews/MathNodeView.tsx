@@ -3,44 +3,10 @@ import 'katex/dist/katex.min.css'
 import type { Node as PMNode } from 'prosemirror-model'
 import type { EditorView, NodeView, NodeViewConstructor } from 'prosemirror-view'
 import { getEquationNumbersForPos, subscribe as subscribeRegistry } from '../labelRegistry'
+import { getMathMacros, injectEquationTags, stripMathWrappers } from '../math-macros'
 
-// Per-paper KaTeX macros distilled from the document's preamble
-// (\newcommand, \DeclareMathOperator, …). Set by the WysiwygEditor when it
-// loads/reloads a paper. Module-scoped on purpose: every MathView in the
-// current document shares the same macro table, and reloading a different
-// paper replaces it wholesale.
-//
-// `\label` MUST be defined as a 1-arg macro that throws away its argument
-// — defining it as the empty string `''` makes KaTeX treat it as 0-arg
-// and the `{key}` argument falls through and renders as visible math text.
-// `\nonumber`/`\notag` are genuinely 0-arg so empty-string is fine there.
-type MacroDefinition = string | object | ((macroExpander: object) => string | object)
-type MacroMap = Record<string, MacroDefinition>
-
-const labelMacro = (context: object): string => {
-  // KaTeX's MacroExpander has a `consumeArgs(n)` method that grabs the
-  // next n brace-groups from the token stream and returns them as
-  // already-tokenised arrays. We discard them.
-  ;(context as { consumeArgs: (n: number) => unknown[] }).consumeArgs(1)
-  return ''
-}
-
-const BUILTIN_MATH_MACROS: MacroMap = {
-  '\\eqref': '\\href{###1}{(\\text{#1})}',
-  '\\label': labelMacro,
-  '\\nonumber': '',
-  '\\notag': ''
-}
-
-let currentMathMacros: MacroMap = { ...BUILTIN_MATH_MACROS }
-
-export function setMathMacros(macros: Record<string, string>): void {
-  currentMathMacros = { ...BUILTIN_MATH_MACROS, ...macros }
-}
-
-export function getMathMacros(): MacroMap {
-  return currentMathMacros
-}
+// Re-exported for the editor, which sets the table when a paper loads.
+export { setMathMacros, getMathMacros } from '../math-macros'
 
 class MathView implements NodeView {
   dom: HTMLElement
@@ -86,7 +52,11 @@ class MathView implements NodeView {
     const rawLatex = (this.node.attrs.latex as string) ?? ''
     let latex = stripWrappers(rawLatex, this.displayMode).trim()
     if (this.displayMode) {
-      latex = injectEquationTags(latex, this.getPos())
+      const pos = this.getPos()
+      latex = injectEquationTags(
+        latex,
+        typeof pos === 'number' ? getEquationNumbersForPos(pos) : undefined
+      )
     }
     // Set anchor id so cleveref-style cross-refs can scroll into view.
     if (this.displayMode) {
@@ -105,7 +75,7 @@ class MathView implements NodeView {
         // to lay out their alignment columns correctly. Forcing 'html' alone
         // silently drops the intercolumn spacing on some envs.
         strict: false,
-        macros: currentMathMacros
+        macros: getMathMacros()
       })
       this.dom.style.color = ''
       this.dom.title = ''
@@ -217,94 +187,8 @@ class MathView implements NodeView {
   }
 }
 
-// Walk an env body and split on top-level `\\` (the row separator), so we
-// can stitch a `\tag{N}` onto each line that should be numbered. Brace-
-// depth aware; recognises the optional `[Npt]` spacing arg after `\\`.
-function splitOnRowBreak(body: string): Array<{ text: string; sep: string }> {
-  const out: Array<{ text: string; sep: string }> = []
-  let depth = 0
-  let last = 0
-  let i = 0
-  while (i < body.length) {
-    const c = body[i]
-    if (c === '\\') {
-      if (body[i + 1] === '\\' && depth === 0) {
-        let sepEnd = i + 2
-        while (sepEnd < body.length && /\s/.test(body[sepEnd])) sepEnd++
-        if (body[sepEnd] === '[') {
-          const close = body.indexOf(']', sepEnd)
-          if (close !== -1) sepEnd = close + 1
-        }
-        out.push({ text: body.slice(last, i), sep: body.slice(i, sepEnd) })
-        last = sepEnd
-        i = sepEnd
-        continue
-      }
-      if (body[i + 1] === '{' || body[i + 1] === '}') {
-        i += 2
-        continue
-      }
-      i += 1
-      continue
-    }
-    if (c === '{') depth++
-    else if (c === '}') depth--
-    i++
-  }
-  out.push({ text: body.slice(last), sep: '' })
-  return out
-}
-
-// If the registry has assigned numbers to this mathBlock's lines, splice
-// `\tag{N}` into each numbered line's content. Lines marked unnumbered
-// in the registry (because they had `\nonumber`/`\notag` or are blank)
-// are left alone. KaTeX renders `\tag{}` as the flush-right marker.
-function injectEquationTags(latex: string, pos: number | undefined): string {
-  if (typeof pos !== 'number') return latex
-  const tags = getEquationNumbersForPos(pos)
-  if (!tags || tags.length === 0) return latex
-  const envMatch = /^(\s*)\\begin\{([a-zA-Z]+)(\*?)\}([\s\S]*?)\\end\{[a-zA-Z]+\*?\}(\s*)$/.exec(
-    latex
-  )
-  if (!envMatch) return latex
-  const [, lead, envName, , body, trail] = envMatch
-  // Render through the STARRED variant and supply every number ourselves.
-  // KaTeX numbers rows of `align`/`gather` automatically starting from 1,
-  // which both restarted the count in each block and put numbers on rows
-  // the document marked `\nonumber` (we strip `\nonumber` for KaTeX, so it
-  // can't see them). Starred envs never auto-number, so `\tag{N}` is the
-  // only thing that shows.
-  const open = `${lead}\\begin{${envName}*}`
-  const close = `\\end{${envName}*}${trail}`
-
-  // Single-line env (equation) — append \tag{N} just before \end.
-  if (tags.length === 1) {
-    if (tags[0]) return `${open}${body.trimEnd()} \\tag{${tags[0]}}\n${close}`
-    return `${open}${body}${close}`
-  }
-  const segments = splitOnRowBreak(body)
-  if (segments.length !== tags.length) return latex // shape mismatch — leave alone
-  const rebuilt = segments
-    .map((seg, idx) => {
-      const tag = tags[idx]
-      const trimmed = seg.text.replace(/\s+$/, '')
-      const withTag = tag ? `${trimmed} \\tag{${tag}}` : seg.text
-      return withTag + seg.sep
-    })
-    .join('')
-  return `${open}${rebuilt}${close}`
-}
-
-// For block math the latex may be stored as a full delimited form. KaTeX
-// understands `\begin{equation}...\end{equation}`, `\begin{align*}...`, and
-// the other math envs natively in displayMode — DO NOT strip those, or
-// KaTeX loses alignment context and chokes on bare `&=` / `\\`. Only
-// strip `\[...\]` since KaTeX does NOT recognize those as delimiters.
 function stripWrappers(latex: string, displayMode: boolean): string {
-  if (!displayMode) return latex
-  const dm = /^\s*\\\[([\s\S]*?)\\\]\s*$/.exec(latex)
-  if (dm) return dm[1].trim()
-  return latex
+  return displayMode ? stripMathWrappers(latex) : latex
 }
 
 export const mathNodeView: NodeViewConstructor = (node, view, getPos) =>

@@ -1,4 +1,5 @@
 import { Node as PMNode, Mark } from 'prosemirror-model'
+import { encodeTextSymbols } from './text-symbols'
 
 const SECTION_MACRO_BY_LEVEL: Record<number, string> = {
   1: 'section',
@@ -30,10 +31,9 @@ export function serializeDocToLatex(doc: PMNode): string {
   }
   parts.push('\n\\begin{document}\n')
 
-  doc.forEach((child) => {
-    if (child.type.name === 'preamble') return
-    parts.push(serializeBlock(child))
-  })
+  parts.push(
+    serializeBlockSeq(childrenOf(doc).filter((child) => child.type.name !== 'preamble'))
+  )
 
   parts.push('\n\\end{document}\n')
   return parts.join('')
@@ -78,6 +78,112 @@ function serializeTitleMetadata(node: PMNode): string {
   return lines.join('\n')
 }
 
+// Join a run of sibling blocks.
+//
+// Each `serializeBlock` result is trimmed and re-joined here rather than
+// carrying its own separators, because the separator is a property of the
+// *pair*: a blank line between a paragraph and the display equation it
+// introduces would end the paragraph, so the equation stops being part of
+// the sentence and the text after it gets indented as a new paragraph.
+// Everywhere else a blank line is what an author would have written.
+//
+// Note the asymmetry: only the lead-in direction is glued. Text *after* a
+// display stays its own paragraph, because gluing it on would silently
+// un-indent it and there's no idiom making that the author's likely intent.
+const NO_BLANK_LINE_BETWEEN = new Set(['paragraph>mathBlock', 'paragraph>codeBlock'])
+
+function serializeBlockSeq(children: PMNode[]): string {
+  const parts: Array<{ name: string; text: string }> = []
+  for (const child of children) {
+    const text = serializeBlock(child).replace(/^\n+/, '').replace(/\n+$/, '')
+    if (text.length === 0) continue
+    parts.push({ name: child.type.name, text })
+  }
+  return parts
+    .map((part, i) => {
+      if (i === 0) return part.text
+      const sep = NO_BLANK_LINE_BETWEEN.has(`${parts[i - 1].name}>${part.name}`) ? '\n' : '\n\n'
+      return sep + part.text
+    })
+    .join('')
+}
+
+function childrenOf(node: PMNode, skipFirst = false): PMNode[] {
+  const out: PMNode[] = []
+  node.forEach((child, _offset, index) => {
+    if (skipFirst && index === 0) return
+    out.push(child)
+  })
+  return out
+}
+
+// ── Line wrapping ──────────────────────────────────────────────────────
+// The WYSIWYG view rewrites the whole file on every transaction, so an
+// unwrapped serializer turns a hard-wrapped paper into one line per
+// paragraph — a diff touching most of the file the first time a user types
+// a character. Re-wrapping at the conventional width keeps the churn local.
+//
+// Breaks are only taken at spaces that are safe: not inside math, not
+// inside a brace group (so `\cite{a, b}` and `\href{…}{…}` stay intact),
+// and not inside a `\verb` span, where a newline changes the output.
+const WRAP_WIDTH = 80
+
+function safeBreakPoints(text: string): number[] {
+  const points: number[] = []
+  let depth = 0
+  let inMath = false
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]
+    if (c === '\\') {
+      // `\verb<delim>…<delim>` is literal: skip the whole span.
+      const verb = /^\\verb\*?(.)/.exec(text.slice(i))
+      if (verb) {
+        const end = text.indexOf(verb[1], i + verb[0].length)
+        i = end === -1 ? text.length : end
+        continue
+      }
+      i++ // an escaped character is never a delimiter
+      continue
+    }
+    if (c === '$') {
+      inMath = !inMath
+      continue
+    }
+    if (inMath) continue
+    if (c === '{') depth++
+    else if (c === '}') depth--
+    else if (c === ' ' && depth === 0) points.push(i)
+  }
+  return points
+}
+
+function wrapLatex(text: string, width = WRAP_WIDTH): string {
+  if (text.length <= width || text.includes('\n')) return text
+  const points = safeBreakPoints(text)
+  if (points.length === 0) return text
+  const out: string[] = []
+  let start = 0
+  let cursor = 0
+  while (cursor < points.length) {
+    // Furthest break that still fits, or the first one past the margin when
+    // a single word is longer than the line.
+    let chosen = -1
+    while (cursor < points.length && points[cursor] - start <= width) {
+      chosen = points[cursor]
+      cursor++
+    }
+    if (chosen === -1) {
+      chosen = points[cursor]
+      cursor++
+    }
+    if (chosen === undefined || chosen <= start) break
+    out.push(text.slice(start, chosen))
+    start = chosen + 1
+  }
+  out.push(text.slice(start))
+  return out.filter((line) => line.length > 0).join('\n')
+}
+
 function serializeBlock(node: PMNode): string {
   switch (node.type.name) {
     case 'section': {
@@ -90,15 +196,13 @@ function serializeBlock(node: PMNode): string {
       out += `\n\\${macro}${star}{${inline}}`
       for (const lbl of labels) out += `\\label{${lbl}}`
       out += '\n'
-      node.forEach((child, _, i) => {
-        if (i === 0) return
-        out += serializeBlock(child)
-      })
+      const body = serializeBlockSeq(childrenOf(node, true))
+      if (body) out += `\n${body}\n`
       return out
     }
     case 'paragraph': {
       const inline = serializeInline(node).trim()
-      return inline.length > 0 ? `\n${inline}\n` : ''
+      return inline.length > 0 ? `\n${wrapLatex(inline)}\n` : ''
     }
     case 'mathBlock':
       return `\n${(node.attrs.latex as string).trim()}\n`
@@ -147,10 +251,7 @@ function serializeTheorem(node: PMNode): string {
   const kind = (node.attrs.kind as string) || 'theorem'
   const title = node.attrs.title as string | null
   const label = node.attrs.label as string | null
-  let body = ''
-  node.forEach((child) => {
-    body += serializeBlock(child)
-  })
+  const body = serializeBlockSeq(childrenOf(node))
   const open = title ? `\\begin{${kind}}[${title}]` : `\\begin{${kind}}`
   const lbl = label ? `\\label{${label}}` : ''
   return `\n${open}${lbl}\n${body.trim()}\n\\end{${kind}}\n`
@@ -197,13 +298,40 @@ function serializeFloat(node: PMNode): string {
   const kind = (node.attrs.kind as string) || 'table'
   const label = node.attrs.label as string | null
   const open = `\\begin{${kind}}${(node.attrs.args as string) || ''}`
-  let body = ''
-  if (node.attrs.centering as boolean) body += '\n\\centering\n'
+  // Float bodies are structured content, not prose: `\centering`, the
+  // graphic, and the caption belong on consecutive lines. A blank line
+  // between them would start a new paragraph inside the float and add
+  // vertical space the author never asked for.
+  const parts: Array<{ name: string; text: string }> = []
+  if (node.attrs.centering as boolean) parts.push({ name: 'centering', text: '\\centering' })
+
+  // `\label` has to follow the `\caption` it belongs to — LaTeX resolves a
+  // label against whatever counter was last stepped, so a label written
+  // before the caption picks up the enclosing section's number instead of
+  // the float's. It rides along on the caption's part; a float with no
+  // caption gets it last.
+  let labelled = false
   node.forEach((child) => {
-    body += serializeBlock(child)
+    let text = serializeBlock(child).replace(/^\n+/, '').replace(/\n+$/, '')
+    if (text.length === 0) return
+    if (child.type.name === 'caption' && label && !labelled) {
+      text += `\n\\label{${label}}`
+      labelled = true
+    }
+    parts.push({ name: child.type.name, text })
   })
-  if (label) body += `\n\\label{${label}}\n`
-  return `\n${open}\n${body.trim()}\n\\end{${kind}}\n`
+  if (label && !labelled) parts.push({ name: 'label', text: `\\label{${label}}` })
+
+  const body = parts
+    .map((part, i) => {
+      if (i === 0) return part.text
+      // Consecutive paragraphs are still prose and keep their blank line.
+      const blank = parts[i - 1].name === 'paragraph' && part.name === 'paragraph'
+      return (blank ? '\n\n' : '\n') + part.text
+    })
+    .join('')
+
+  return `\n${open}\n${body}\n\\end{${kind}}\n`
 }
 
 function serializeList(node: PMNode): string {
@@ -214,28 +342,54 @@ function serializeList(node: PMNode): string {
   const opt = options ? `[${options}]` : ''
   const items: string[] = []
   node.forEach((item) => {
-    let body = ''
-    item.forEach((child) => {
-      body += serializeBlock(child)
-    })
+    const body = serializeBlockSeq(childrenOf(item))
     const marker = item.attrs.marker as string | null
-    items.push(`  \\item${marker ? `[${marker}]` : ''} ${body.trim()}`)
+    // Indent continuation lines so a nested list reads as nested in the
+    // source too, the way an author would have written it. Blank lines stay
+    // blank — indenting them just leaves trailing whitespace.
+    const text = body.trim().replace(/\n(?=[^\n])/g, '\n  ')
+    items.push(`  \\item${marker ? `[${marker}]` : ''} ${text}`)
   })
   return `\n\\begin{${env}}${opt}\n${items.join('\n')}\n\\end{${env}}\n`
 }
 
 function serializeInline(node: PMNode): string {
+  const children: PMNode[] = []
+  node.forEach((child) => children.push(child))
+
+  // Serialize *runs* of children that share a mark set, not one child at a
+  // time. `\emph{The \TeX{}book}` holds a text node, an atom, and another
+  // text node all carrying the em mark; wrapping each separately produced
+  // `\emph{The }\TeX\emph{book}` — same output, but source the author
+  // didn't write and wouldn't recognise.
   let out = ''
-  node.forEach((child) => {
-    out += serializeInlineChild(child)
-  })
+  let i = 0
+  while (i < children.length) {
+    const marks = children[i].marks
+    let inner = ''
+    let j = i
+    while (j < children.length && Mark.sameSet(children[j].marks, marks)) {
+      inner += serializeInlineChild(children[j], children[j + 1])
+      j++
+    }
+    out += wrapMarks(inner, marks)
+    i = j
+  }
   return out
 }
 
-function serializeInlineChild(node: PMNode): string {
-  if (node.isText) {
-    return wrapMarks(escapeLatex(node.text ?? ''), node.marks)
-  }
+// TeX eats the whitespace after a control word, so `\LaTeX Round` sets
+// "LaTeXRound". When a bare macro is followed by text that starts with a
+// space, the macro needs a `{}` (or a backslash-space) to hold the gap open.
+function needsSpacingGuard(source: string, next: PMNode | undefined): boolean {
+  if (!/^\\[A-Za-z@]+$/.test(source)) return false
+  if (!next) return false
+  if (!next.isText) return false
+  return /^\s/.test(next.text ?? '')
+}
+
+function serializeInlineChild(node: PMNode, next?: PMNode): string {
+  if (node.isText) return escapeLatex(node.text ?? '')
   switch (node.type.name) {
     case 'mathInline': {
       const latex = (node.attrs.latex as string).trim()
@@ -261,8 +415,10 @@ function serializeInlineChild(node: PMNode): string {
       if (cmd === 'footnotemark') return '\\footnotemark'
       return `\\${cmd}{${node.attrs.source as string}}`
     }
-    case 'rawInline':
-      return node.attrs.source as string
+    case 'rawInline': {
+      const source = node.attrs.source as string
+      return needsSpacingGuard(source, next) ? `${source}{}` : source
+    }
     case 'crossRef': {
       const cmd = (node.attrs.cmd as string) || 'ref'
       const keys = (node.attrs.keys as string[]) ?? []
@@ -286,7 +442,10 @@ const MARK_MACRO: Record<string, string> = {
   em: 'emph',
   strong: 'textbf',
   code: 'texttt',
-  smallcaps: 'textsc'
+  smallcaps: 'textsc',
+  superscript: 'textsuperscript',
+  subscript: 'textsubscript',
+  underline: 'underline'
 }
 
 function wrapMarks(text: string, marks: readonly Mark[]): string {
@@ -305,24 +464,42 @@ function wrapMarks(text: string, marks: readonly Mark[]): string {
   return result
 }
 
+// Text → source. One pass, because a multi-pass replace re-escapes the
+// braces it just inserted: `\\` became `\textbackslash{}` and the next
+// rule turned that into `\textbackslash\{\}`, growing by two characters on
+// every save until the paragraph was unreadable.
+const ESCAPE_MAP: Record<string, string> = {
+  '\\': '\\textbackslash{}',
+  '&': '\\&',
+  '%': '\\%',
+  $: '\\$',
+  '#': '\\#',
+  _: '\\_',
+  '{': '\\{',
+  '}': '\\}',
+  '~': '\\textasciitilde{}',
+  '^': '\\textasciicircum{}',
+  // The parser reads TeX's ligatures as the characters they set (`---` is an
+  // em-dash); these put the idiomatic source shorthand back.
+  '\u2014': '---',
+  '\u2013': '--',
+  '\u201c': '``',
+  '\u201d': "''",
+  '\u2018': '`',
+  '\u2019': "'",
+  '\u00a0': '~'
+}
+
 function escapeLatex(s: string): string {
   // Minimal LaTeX escaping for special characters that aren't already
   // wrapped in math/raw nodes. Keep this conservative — over-escaping
   // breaks valid LaTeX in user input.
   //
-  // Round-trip notes: the parser maps `~` → U+00A0, `--` → U+2013, `---`
-  // → U+2014 so the WYSIWYG view reads as prose. We reverse those here so
-  // the .tex source keeps its idiomatic shortcuts on save.
-  // Order matters: escape literal `~` BEFORE turning U+00A0 into `~`, so
-  // round-tripped nbsps don't get re-escaped as \textasciitilde{}.
-  return s
-    .replace(/\\/g, '\\textbackslash{}')
-    .replace(/([&%$#_{}])/g, '\\$1')
-    .replace(/~/g, '\\textasciitilde{}')
-    .replace(/\^/g, '\\textasciicircum{}')
-    .replace(/—/g, '---')
-    .replace(/–/g, '--')
-    .replace(/“/g, '``')
-    .replace(/”/g, "''")
-    .replace(/ /g, '~')
+  // Accented and symbol characters go back out as their LaTeX escapes
+  // (`\u00e9` → `\'{e}`) so the file compiles without depending on the document
+  // loading `inputenc` — see text-symbols.ts. Characters with no known
+  // escape pass through as UTF-8.
+  return encodeTextSymbols(
+    s.replace(/[\\&%$#_{}~^\u2014\u2013\u201c\u201d\u2018\u2019\u00a0]/g, (c) => ESCAPE_MAP[c] ?? c)
+  )
 }

@@ -1,16 +1,70 @@
 import { renderInlineLatex } from './inline-render'
 
-// Detect a tabular environment in the source. Returns null if the source
-// isn't a (single, top-level) tabular.
-const TABULAR_RE = /^\s*\\begin\{(tabular\*?)\}\s*(?:\{[^}]*\})?\s*([\s\S]*?)\\end\{\1\}\s*$/
+// Tabular-like environments we can lay out as a real HTML table.
+const TABULAR_ENVS = ['tabular', 'tabular*', 'tabularx', 'longtable', 'array']
+
+// Splitting the header off can't be done with a regex: a booktabs column
+// spec is `{@{}llrr@{}}`, and `\{[^}]*\}` stops at the first `}` inside
+// `@{}` — which is how the whole spec used to end up rendered as a table
+// row reading "llrr@".
+interface TabularSource {
+  env: string
+  colSpec: string
+  body: string
+}
+
+function splitTabularSource(source: string): TabularSource | null {
+  const text = source.trim()
+  const open = /^\\begin\{([A-Za-z]+\*?)\}/.exec(text)
+  if (!open || !TABULAR_ENVS.includes(open[1])) return null
+  const env = open[1]
+  const close = `\\end{${env}}`
+  if (!text.endsWith(close)) return null
+
+  // Consume the environment's arguments. The column spec is the last
+  // brace group before the body — `tabularx` and `tabular*` take a width
+  // first, `longtable` an optional `[c]`.
+  let i = open[0].length
+  const groups: string[] = []
+  while (i < text.length) {
+    while (i < text.length && /\s/.test(text[i])) i++
+    const openMark = text[i]
+    if (openMark !== '{' && openMark !== '[') break
+    const closeMark = openMark === '{' ? '}' : ']'
+    let depth = 0
+    let j = i
+    for (; j < text.length; j++) {
+      const c = text[j]
+      if (c === '\\') {
+        j++
+        continue
+      }
+      if (c === openMark) depth++
+      else if (c === closeMark) {
+        depth--
+        if (depth === 0) break
+      }
+    }
+    if (j >= text.length) return null
+    if (openMark === '{') groups.push(text.slice(i + 1, j))
+    i = j + 1
+  }
+  if (groups.length === 0) return null
+  return {
+    env,
+    colSpec: groups[groups.length - 1],
+    body: text.slice(i, text.length - close.length)
+  }
+}
 
 export function isTabularSource(source: string): boolean {
-  return TABULAR_RE.test(source.trim())
+  return splitTabularSource(source) !== null
 }
 
 interface Cell {
   content: string
   span: number
+  rowSpan: number
   align: Align
 }
 type Align = 'l' | 'c' | 'r'
@@ -124,6 +178,14 @@ function consumeLeadingRules(s: string): {
       rest = rest.slice(bot[0].length).trimStart()
       continue
     }
+    // `\hline` is the classic (non-booktabs) rule. Without it a `|l|c|`
+    // table rendered as bare text with no grid at all.
+    const hline = /^\\hline\b/.exec(rest)
+    if (hline) {
+      rule = rule ?? 'mid'
+      rest = rest.slice(hline[0].length).trimStart()
+      continue
+    }
     const cmid = /^\\cmidrule(?:\([^)]*\))?\{(\d+)\s*-\s*(\d+)\}/.exec(rest)
     if (cmid) {
       cmids.push({ from: parseInt(cmid[1], 10), to: parseInt(cmid[2], 10) })
@@ -137,22 +199,58 @@ function consumeLeadingRules(s: string): {
 
 function parseColSpec(spec: string): Align[] {
   const out: Align[] = []
-  for (const c of spec) {
+  for (let i = 0; i < spec.length; i++) {
+    const c = spec[i]
+    // Tokens that take a brace argument: `@{…}` (inter-column material),
+    // `p{w}`/`m{w}`/`b{w}` (fixed width), `>{…}`/`<{…}` (array package
+    // hooks). Skip the argument, or its contents get read as columns —
+    // `@{}llrr@{}` used to yield a phantom leading column.
+    if ('@pmbP><!'.includes(c) && spec[i + 1] === '{') {
+      let depth = 0
+      let j = i + 1
+      for (; j < spec.length; j++) {
+        if (spec[j] === '{') depth++
+        else if (spec[j] === '}') {
+          depth--
+          if (depth === 0) break
+        }
+      }
+      // `p{w}`-style columns still occupy a column; `@{}`/`>{}`/`<{}` don't.
+      if ('pmbP'.includes(c)) out.push('l')
+      i = j
+      continue
+    }
     if (c === 'l' || c === 'c' || c === 'r') out.push(c)
-    // Ignore vertical-rule and length tokens (`|`, `*{n}{...}`, `p{w}`,
-    // `m{w}`, `b{w}`) — column spec parsing is best-effort here.
+    if (c === 'X') out.push('l') // tabularx flexible column
+    // `|` and whitespace carry no column of their own.
   }
   return out
 }
 
-// `\multicolumn{n}{align}{content}` — parse out span/align/content if the
-// cell IS a multicolumn, otherwise return null.
-function parseMulticolumn(cellText: string): { span: number; align: Align; content: string } | null {
-  const m = /^\s*\\multicolumn\{(\d+)\}\{([^}]*)\}\{/.exec(cellText)
+// `\multicolumn{n}{align}{content}` and `\multirow{n}{width}{content}` —
+// the two cell macros that carry their payload in a trailing brace group.
+// Left unparsed, the whole macro used to render as literal text: a header
+// cell reading "2*Method" instead of "Method".
+function parseSpanningCell(
+  cellText: string
+): { span: number; rowSpan: number; align: Align | null; content: string } | null {
+  const mc = /^\s*\\multicolumn\{(\d+)\}\{([^}]*)\}\{/.exec(cellText)
+  const mr = /^\s*\\multirow\*?(?:\[[^\]]*\])?\{(\d+)\}(?:\[[^\]]*\])?\{[^{}]*\}(?:\[[^\]]*\])?\{/.exec(
+    cellText
+  )
+  const m = mc ?? mr
   if (!m) return null
-  const span = parseInt(m[1], 10) || 1
-  const alignSpec = m[2]
-  const align: Align = alignSpec.includes('c') ? 'c' : alignSpec.includes('r') ? 'r' : 'l'
+  const count = parseInt(m[1], 10) || 1
+  const span = mc ? count : 1
+  const rowSpan = mc ? 1 : count
+  const alignSpec = mc ? m[2] : ''
+  const align: Align | null = mc
+    ? alignSpec.includes('c')
+      ? 'c'
+      : alignSpec.includes('r')
+        ? 'r'
+        : 'l'
+    : null
   const contentStart = m[0].length
   // Find matching close brace for the content arg.
   let depth = 1
@@ -167,7 +265,7 @@ function parseMulticolumn(cellText: string): { span: number; align: Align; conte
     else if (c === '}') {
       depth--
       if (depth === 0) {
-        return { span, align, content: cellText.slice(contentStart, i) }
+        return { span, rowSpan, align, content: cellText.slice(contentStart, i) }
       }
     }
     i++
@@ -176,12 +274,10 @@ function parseMulticolumn(cellText: string): { span: number; align: Align; conte
 }
 
 function parseTabular(source: string): ParsedTabular | null {
-  const m = TABULAR_RE.exec(source.trim())
-  if (!m) return null
-  const colSpecMatch = /\\begin\{tabular\*?\}\s*(?:\{([^}]*)\})?/.exec(source)
-  const colSpec = parseColSpec(colSpecMatch?.[1] ?? '')
-  const body = m[2]
-  const rowSegs = splitRows(body)
+  const split = splitTabularSource(source)
+  if (!split) return null
+  const colSpec = parseColSpec(split.colSpec)
+  const rowSegs = splitRows(split.body)
 
   const rows: ParsedRow[] = []
   let pendingRule: 'top' | 'mid' | 'bottom' | undefined
@@ -208,14 +304,19 @@ function parseTabular(source: string): ParsedTabular | null {
 
     const cellTexts = splitCells(rest)
     const cells: Cell[] = cellTexts.map((t, i) => {
-      const mc = parseMulticolumn(t)
-      if (mc) {
-        return { content: mc.content.trim(), span: mc.span, align: mc.align }
-      }
       // Default align: explicit colspec wins; otherwise left for the first
       // column, centre for subsequent columns (a typical results table).
       const fallback: Align = i === 0 ? 'l' : 'c'
-      return { content: t.trim(), span: 1, align: colSpec[i] ?? fallback }
+      const spanning = parseSpanningCell(t)
+      if (spanning) {
+        return {
+          content: spanning.content.trim(),
+          span: spanning.span,
+          rowSpan: spanning.rowSpan,
+          align: spanning.align ?? colSpec[i] ?? fallback
+        }
+      }
+      return { content: t.trim(), span: 1, rowSpan: 1, align: colSpec[i] ?? fallback }
     })
     rows.push({
       cells,
@@ -224,6 +325,29 @@ function parseTabular(source: string): ParsedTabular | null {
     })
     pendingRule = undefined
     pendingCmids = []
+  }
+
+  // A `\multirow{2}` cell leaves the same slot empty in the row below it.
+  // HTML's rowspan fills that slot itself, so the empty placeholder has to
+  // go or every later cell in the row shifts one column right.
+  for (let r = 0; r < rows.length; r++) {
+    let col = 0
+    for (const cell of rows[r].cells) {
+      if (cell.rowSpan > 1) {
+        for (let k = r + 1; k < Math.min(rows.length, r + cell.rowSpan); k++) {
+          const target = rows[k]
+          let c = 0
+          for (let ci = 0; ci < target.cells.length; ci++) {
+            if (c === col && target.cells[ci].content === '') {
+              target.cells.splice(ci, 1)
+              break
+            }
+            c += target.cells[ci].span
+          }
+        }
+      }
+      col += cell.span
+    }
   }
 
   // Width = max cell-spans-summed across rows, since some rows have
@@ -265,6 +389,7 @@ export function renderTabular(source: string): HTMLElement {
     for (const cell of row.cells) {
       const td = document.createElement('td')
       td.colSpan = cell.span
+      if (cell.rowSpan > 1) td.rowSpan = cell.rowSpan
       td.style.textAlign = cell.align === 'c' ? 'center' : cell.align === 'r' ? 'right' : 'left'
       // The cell is covered by a cmidrule if ANY of its sub-columns are.
       let coveredByCmid = false

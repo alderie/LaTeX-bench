@@ -1,5 +1,6 @@
 import type { Node as PMNode } from 'prosemirror-model'
 import type { NodeView, NodeViewConstructor } from 'prosemirror-view'
+import { formatNumberList } from '../ref-format'
 import { getCitation, subscribe } from '../labelRegistry'
 
 class CitationView implements NodeView {
@@ -67,30 +68,6 @@ class CitationView implements NodeView {
   destroy(): void {
     this.unsubscribe()
   }
-}
-
-// "1, 2, 3, 5, 7, 8" → "1–3, 5, 7–8". Mirrors natbib's `sort&compress`.
-function formatNumberList(nums: number[]): string {
-  if (nums.length === 0) return ''
-  const groups: Array<[number, number]> = []
-  let start = nums[0]
-  let prev = nums[0]
-  for (let i = 1; i < nums.length; i++) {
-    const n = nums[i]
-    if (n === prev + 1) {
-      prev = n
-    } else if (n === prev) {
-      // duplicate — skip
-    } else {
-      groups.push([start, prev])
-      start = n
-      prev = n
-    }
-  }
-  groups.push([start, prev])
-  return groups
-    .map(([a, b]) => (a === b ? `${a}` : a + 1 === b ? `${a}, ${b}` : `${a}–${b}`))
-    .join(', ')
 }
 
 export const citationNodeView: NodeViewConstructor = (node) => new CitationView(node)

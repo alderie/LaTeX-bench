@@ -637,15 +637,19 @@ export interface GridCell {
  * saved `.tex` nobody asked for.
  *
  * The trailing empty row a body ending in `\\` leaves behind is dropped, for
- * the same reason KaTeX doesn't draw it: it is punctuation, not a row.
+ * the same reason KaTeX doesn't draw it: it is punctuation, not a row. A
+ * blank row that carries its own `&` is a different thing — a row of empty
+ * cells, which is exactly what adding a row makes — and KaTeX draws that.
  */
 export function gridCells(body: string, span: GridSpan): GridCell[] {
   const grid = body.slice(span.from, span.to)
   const spans = cellSpans(grid)
   const lastRow = spans[spans.length - 1].row
+  const trailing = spans.filter((cell) => cell.row === lastRow)
   const trailingBlank =
     lastRow > 0 &&
-    spans.every((cell) => cell.row !== lastRow || grid.slice(cell.from, cell.to).trim() === '')
+    trailing.length === 1 &&
+    grid.slice(trailing[0].from, trailing[0].to).trim() === ''
 
   const cells: GridCell[] = []
   for (const cell of spans) {

@@ -13,7 +13,7 @@
 //     would change what arguments are required, which is not a one-click edit
 //   - the column spec is metadata, so it's a field: `@{}llrr@{}` is the one
 //     part of a table you edit as a string rather than as content
-//   - the shape is structure, so it's two buttons
+//   - the shape is a measurement, so it's a note
 //   - the source is the only thing left, so it's the only thing in the text
 //     area — highlighted, because `&` and `\\` are what you navigate by
 //
@@ -22,6 +22,11 @@
 // cell reading `4.81 \pm 0.92` and a small LaTeX field opens over it, Tab
 // walks the row, and the source above follows along. Finding that number in
 // the source instead means counting `&`s in a line that wraps twice.
+//
+// Growing the table is part of walking it — Tab past the last cell makes a
+// column, Enter past the last row makes a row — so the bar has no buttons for
+// it. It had two, from when the source area was the only way in and a row
+// break had to be typed by hand.
 
 import { isTabularSource, renderEditableTabular } from '../renderers/tabular'
 import {
@@ -34,7 +39,8 @@ import {
 import { createHeaderField, type HeaderField } from '../nodeviews/header-field'
 import { CellEditor, type CellSite } from './cell-editor'
 import { CodeField } from './code-field'
-import { bindFinishKeys, EditorPanel, panelButton, panelName, panelNote } from './editor-panel'
+import { EditHistory } from './edit-history'
+import { bindFinishKeys, EditorPanel, panelName, panelNote } from './editor-panel'
 
 export interface TabularEditorOptions {
   source: string
@@ -55,6 +61,7 @@ export class TabularEditor {
   private colSpec: HeaderField
   private cellEditor: CellEditor
   private cells: CellSite[] = []
+  private history: EditHistory<string>
   private readonly original: string
   private finished = false
   private paintQueued = false
@@ -83,14 +90,6 @@ export class TabularEditor {
     })
     this.panel.addControl(this.colSpec.dom)
 
-    const grid = document.createElement('span')
-    grid.className = 'block-editor__grid'
-    grid.appendChild(panelButton('rows', 'Add row', () => this.growFromBar('row'), { plus: true }))
-    grid.appendChild(
-      panelButton('columns', 'Add column', () => this.growFromBar('column'), { plus: true })
-    )
-    this.panel.addControl(grid)
-
     this.shapeNote = panelNote('')
     this.panel.addControl(this.shapeNote)
 
@@ -101,6 +100,12 @@ export class TabularEditor {
       onInput: () => this.onInput()
     })
     this.panel.body.appendChild(this.code.dom)
+
+    // ⌘Z walks these. The field's own undo can't: the cell fields in the
+    // preview and the column spec write to it by assignment, which clears it.
+    this.history = new EditHistory<string>(options.source, 0, {
+      restore: (source, caret) => this.restore(source, caret)
+    })
 
     this.preview = this.panel.previewHost()
     this.preview.classList.add('block-editor__preview--tabular')
@@ -117,6 +122,18 @@ export class TabularEditor {
 
     this.paint()
     this.reflectShape()
+
+    // Capture, and on the whole panel: the undo keys have to be taken before
+    // the field they were pressed in acts on them, whichever field that is.
+    this.panel.dom.addEventListener(
+      'keydown',
+      (event) => {
+        if (!this.history.handleKey(event)) return
+        event.preventDefault()
+        event.stopPropagation()
+      },
+      true
+    )
 
     bindFinishKeys(this.panel, this.code.input, {
       commit: () => this.finish(true),
@@ -153,6 +170,24 @@ export class TabularEditor {
     this.cellEditor.destroy()
   }
 
+  // ── Undo ─────────────────────────────────────────────────────────────
+
+  /** Note the current source, coalescing a run of keystrokes into one step. */
+  private remember(kind: 'type' | 'step' = 'step'): void {
+    this.history.record(this.code.value, this.code.input.selectionStart ?? 0, kind)
+  }
+
+  /** Put a remembered source back on every part of the surface. */
+  private restore(source: string, caret: number): void {
+    this.cellEditor.close()
+    this.code.value = source
+    this.colSpec.setValue(tabularColumnSpec(source))
+    this.paint()
+    this.reflectShape()
+    this.code.focus()
+    this.code.setSelectionRange(caret, caret)
+  }
+
   // ── Editing ──────────────────────────────────────────────────────────
 
   /** Run a source-to-source rewrite and keep the surface in step. */
@@ -162,18 +197,8 @@ export class TabularEditor {
     this.code.value = transform(this.code.value)
     this.colSpec.setValue(tabularColumnSpec(this.code.value))
     this.code.focus()
+    this.remember()
     this.onInput()
-  }
-
-  /** Grow the table from the bar, then land in the cell that made. */
-  private growFromBar(what: 'row' | 'column'): void {
-    this.apply(what === 'row' ? addTabularRow : addTabularColumn)
-    this.paint()
-    const target =
-      what === 'row'
-        ? this.cells.filter((cell) => cell.row === lastRow(this.cells) && cell.column === 0)[0]
-        : this.cells.filter((cell) => cell.row === 0).pop()
-    if (target) this.cellEditor.openAt(target.grid, target.row, target.column)
   }
 
   private writeColumnSpec(spec: string): void {
@@ -181,10 +206,12 @@ export class TabularEditor {
     if (next === this.code.value) return
     this.cellEditor.close()
     this.code.value = next
+    this.remember()
     this.onInput()
   }
 
   private onInput(): void {
+    this.remember('type')
     this.schedulePaint()
     this.reflectShape()
   }
@@ -199,6 +226,9 @@ export class TabularEditor {
     const source = this.code.value
     this.code.value = source.slice(0, cell.from) + text + source.slice(cell.to)
     this.reflectShape()
+    // Typing in a cell coalesces the way typing in the source does, so undo
+    // goes back to what the cell held rather than a letter at a time.
+    this.history.record(this.code.value, cell.from, 'type')
     return cell.from + text.length
   }
 
@@ -263,11 +293,6 @@ export class TabularEditor {
     this.colSpec.commit()
     this.options.onCommit(this.code.value === this.original ? this.original : this.code.value)
   }
-}
-
-/** The bottom row of the table, which is where a new one lands. */
-function lastRow(cells: CellSite[]): number {
-  return cells.reduce((bottom, cell) => Math.max(bottom, cell.row), 0)
 }
 
 /** The environment's name, for the bar. */

@@ -87,14 +87,14 @@ describe('the table editor', () => {
     expect(field.value).toContain('SGD & 4.81 & 0.92')
   })
 
-  it('grows the table from the bar', () => {
-    const { editor, field } = open()
-    const [addRow, addColumn] = editor.dom.querySelectorAll('.block-editor__button')
-    ;(addRow as HTMLButtonElement).click()
-    expect(editor.dom.querySelector('.block-editor__note')?.textContent).toBe('3 × 3')
-    ;(addColumn as HTMLButtonElement).click()
-    expect(editor.dom.querySelector('.block-editor__note')?.textContent).toBe('3 × 4')
-    expect(field.value).toContain('{@{}lccc@{}}')
+  it('has no row or column buttons on the bar', () => {
+    // The table grows as it is walked — Tab past the last cell, Enter past
+    // the last row — so the only button left is the one that deletes it.
+    const { editor } = open()
+    const titles = [...editor.dom.querySelectorAll('.block-editor__button')].map((button) =>
+      button.getAttribute('title')
+    )
+    expect(titles).toEqual(['Delete this table'])
   })
 
   it('previews the table with the renderer that draws it when closed', () => {
@@ -202,6 +202,22 @@ describe('the table editor', () => {
       expect(commit).toHaveBeenCalledWith(TABLE.replace('4.81', '9.9'))
     })
 
+    it('grows the table when Tab runs out of cells', () => {
+      const { editor, field } = open()
+      click(cells(editor).pop() as HTMLElement)
+      press(cellField(editor), 'Tab')
+      expect(editor.dom.querySelector('.block-editor__note')?.textContent).toBe('2 × 4')
+      expect(field.value).toContain('{@{}lccc@{}}')
+    })
+
+    it('adds a row when Enter runs out of rows', () => {
+      const { editor } = open()
+      click(cells(editor)[3])
+      press(cellField(editor), 'Enter')
+      expect(editor.dom.querySelector('.block-editor__note')?.textContent).toBe('3 × 3')
+      expect(cellField(editor).value).toBe('')
+    })
+
     it('opens a cell by the offset a click on the closed table reports', () => {
       // The rendered table carries the same offsets whether it is being
       // edited or merely read, which is what lets a click on the document's
@@ -221,6 +237,43 @@ describe('the table editor', () => {
       expect(cellField(editor).value).toBe('Stable index')
       type(cellField(editor), 'Tail index')
       expect(field.value).toContain('\\multicolumn{2}{c}{Tail index}')
+    })
+  })
+
+  describe('undo', () => {
+    function undo(editor: TabularEditor): void {
+      press(editor.dom, 'z', { metaKey: true })
+    }
+
+    it('puts back a cell edited in the rendering', () => {
+      const { editor, field } = open()
+      const cell = editor.dom.querySelectorAll('.block-editor__preview td')[4] as HTMLElement
+      cell.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+      const input = editor.dom.querySelector('.cell-editor input') as HTMLInputElement
+      input.value = '9.9'
+      input.dispatchEvent(new window.Event('input', { bubbles: true }))
+      expect(field.value).not.toBe(TABLE)
+      undo(editor)
+      expect(field.value).toBe(TABLE)
+    })
+
+    it('puts back a column added to the table, spec and all', () => {
+      const { editor, field } = open()
+      const last = [...editor.dom.querySelectorAll('.block-editor__preview td')].pop() as HTMLElement
+      last.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+      press(editor.dom.querySelector('.cell-editor input') as HTMLInputElement, 'Tab')
+      expect(field.value).toContain('{@{}lccc@{}}')
+      undo(editor)
+      expect(field.value).toBe(TABLE)
+      const spec = editor.dom.querySelector('.head-field__input') as HTMLInputElement
+      expect(spec.value).toBe('@{}lcc@{}')
+    })
+
+    it('does not let the undo key reach the block and finish it', () => {
+      const { editor, commit, cancel } = open()
+      undo(editor)
+      expect(commit).not.toHaveBeenCalled()
+      expect(cancel).not.toHaveBeenCalled()
     })
   })
 

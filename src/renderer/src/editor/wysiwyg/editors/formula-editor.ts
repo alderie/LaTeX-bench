@@ -32,7 +32,8 @@ import { createDropdown, type Dropdown } from '../dropdown'
 import { markMathCells } from '../renderers/math-cells'
 import { CellEditor, type CellSite } from './cell-editor'
 import { CodeField } from './code-field'
-import { EditorPanel, panelButton, panelName } from './editor-panel'
+import { EditHistory } from './edit-history'
+import { EditorPanel, panelName } from './editor-panel'
 
 // The formula editing surface.
 //
@@ -48,7 +49,6 @@ import { EditorPanel, panelButton, panelName } from './editor-panel'
 //   - the environment is a choice, so it's a dropdown
 //   - the label is metadata, so it's a field (when detaching it is safe —
 //     see math-source, which leaves per-row labels in an `align` alone)
-//   - the grid shape is structure, so it's two buttons and the Tab key
 //   - the maths is the only thing left, so it's the only thing in the text
 //     area — dedented, with the wrapper gone
 //
@@ -62,9 +62,19 @@ import { EditorPanel, panelButton, panelName } from './editor-panel'
 // nothing to click. See `renderers/math-cells`, which traces a rendered cell
 // back to the characters it came from.
 //
+// Growing a grid is part of walking it — Tab past the last cell makes a
+// column, Enter past the last row makes a row — so the bar has no buttons for
+// it. It had two, from when the source area was the only way in.
+//
 // The chrome around all that — the bar, the hint, the delete button, the
 // preview strip — is `EditorPanel`, shared with the table and preamble
 // editors so the three read as one editor with three subjects.
+
+/** What an undo has to put back: the maths, and the wrapper around it. */
+interface FormulaState {
+  body: string
+  shell: MathShell
+}
 
 export interface FormulaEditorOptions {
   latex: string
@@ -89,10 +99,12 @@ export class FormulaEditor {
   private field: HTMLInputElement | HTMLTextAreaElement
   private preview: HTMLElement | null = null
   private completions: CompletionPopup | null = null
-  private gridControls: HTMLElement | null = null
   private envDropdown: Dropdown | null = null
   private cellEditor: CellEditor | null = null
   private cells: CellSite[] = []
+  private history: EditHistory<FormulaState>
+  /** Show the shell's label in the bar, after an undo moved it. */
+  private reflectLabel: (() => void) | null = null
   /**
    * Which grid the row and column buttons act on.
    *
@@ -125,6 +137,11 @@ export class FormulaEditor {
 
     this.code = options.displayMode ? this.buildTextarea() : this.buildInput()
     this.field = this.code.input
+    // Every path that rewrites the source records one of these, and ⌘Z walks
+    // them. The field's own undo is not usable here — see `edit-history`.
+    this.history = new EditHistory<FormulaState>(this.snapshot(), this.field.value.length, {
+      restore: (state, caret) => this.restore(state, caret)
+    })
 
     if (options.displayMode) {
       this.buildBar()
@@ -141,13 +158,15 @@ export class FormulaEditor {
         onCommitBlock: () => this.finish(true)
       })
       this.paint()
-      this.updateGridControls()
     } else {
       this.panel.body.appendChild(this.code.dom)
     }
 
     this.completions = new CompletionPopup((completion) => this.accept(completion))
     this.field.addEventListener('keydown', (event) => this.onKeyDown(event as KeyboardEvent))
+    // Capture, and on the whole panel: the undo keys have to be taken before
+    // the field they were pressed in acts on them, whichever field that is.
+    this.dom.addEventListener('keydown', (event) => this.onUndoKey(event), true)
     // On the subtree rather than the field: the cell fields in the preview,
     // the label and the environment list are all part of "still editing this
     // formula", and a per-field blur handler would have to enumerate them.
@@ -207,16 +226,6 @@ export class FormulaEditor {
     if (this.shell.label !== null || this.canCarryLabel()) {
       this.panel.addControl(this.buildLabelField())
     }
-
-    this.gridControls = document.createElement('span')
-    this.gridControls.className = 'block-editor__grid'
-    this.gridControls.appendChild(
-      panelButton('rows', 'Add row', () => this.growFromBar('row'), { plus: true })
-    )
-    this.gridControls.appendChild(
-      panelButton('columns', 'Add column', () => this.growFromBar('column'), { plus: true })
-    )
-    this.panel.addControl(this.gridControls)
   }
 
   /** Numbered environments are the ones worth referring to by label. */
@@ -247,13 +256,15 @@ export class FormulaEditor {
     input.spellcheck = false
     input.className = 'block-editor__label-input'
     input.title = 'Reference name for \\ref and \\cref'
-    const reflect = (): void => {
+    this.reflectLabel = () => {
+      input.value = this.shell.label ?? ''
       wrap.classList.toggle('block-editor__label--set', input.value.trim() !== '')
     }
-    reflect()
+    this.reflectLabel()
     input.addEventListener('input', () => {
       this.shell = withLabelText(this.shell, input.value)
-      reflect()
+      wrap.classList.toggle('block-editor__label--set', input.value.trim() !== '')
+      this.remember('type')
     })
     input.addEventListener('keydown', (event) => {
       if (event.key === 'Enter' || event.key === 'Escape') {
@@ -287,6 +298,39 @@ export class FormulaEditor {
     })
   }
 
+  // ── Undo ─────────────────────────────────────────────────────────────
+
+  /** Everything an undo has to put back: the maths, and what wraps it. */
+  private snapshot(): FormulaState {
+    return { body: this.field.value, shell: this.shell }
+  }
+
+  /** Note the current state, coalescing a run of keystrokes into one step. */
+  private remember(kind: 'type' | 'step' = 'step'): void {
+    this.history.record(this.snapshot(), this.field.selectionStart ?? 0, kind)
+  }
+
+  private onUndoKey(event: KeyboardEvent): void {
+    if (!this.history.handleKey(event)) return
+    event.preventDefault()
+    event.stopPropagation()
+  }
+
+  /** Put a snapshot back on every part of the surface that shows it. */
+  private restore(state: FormulaState, caret: number): void {
+    this.cellEditor?.close()
+    this.shell = state.shell
+    this.code.value = state.body
+    // The bar is showing the old wrapper: an undone environment switch has to
+    // move the dropdown back, and an undone rename the label field.
+    this.envDropdown?.setValue(shellChoice(this.shell) ?? '')
+    this.reflectLabel?.()
+    this.paint()
+    this.field.focus()
+    this.field.setSelectionRange(caret, caret)
+    this.code.refresh()
+  }
+
   // ── Editing ──────────────────────────────────────────────────────────
 
   private switchEnv(choice: string): void {
@@ -295,8 +339,8 @@ export class FormulaEditor {
     const result = switchEnvironment(this.shell, choice, this.field.value)
     this.shell = result.shell
     this.code.value = result.body
+    this.remember()
     this.schedulePaint()
-    this.updateGridControls()
     this.focus()
   }
 
@@ -307,7 +351,9 @@ export class FormulaEditor {
     const result = writeCell(this.field.value, cell.from, cell.to, text)
     this.code.value = result.body
     this.activeGrid = cell.grid
-    this.updateGridControls()
+    // Typing in a cell coalesces the same way typing in the source does, so
+    // undo goes back to what the cell held rather than a letter at a time.
+    this.history.record(this.snapshot(), cell.from, 'type')
     return result.to
   }
 
@@ -330,57 +376,13 @@ export class FormulaEditor {
     if (!span) return
     this.activeGrid = spans.indexOf(span)
     this.code.value = rewriteGrid(this.field.value, span, what === 'row' ? addRow : addColumn)
-    this.updateGridControls()
-  }
-
-  /**
-   * Grow the active grid from the bar, then land in the cell that made.
-   *
-   * In the rendering when there is one to click, since that is where the
-   * author is looking; in the source otherwise, which is all a formula that
-   * doesn't render has.
-   */
-  private growFromBar(what: 'row' | 'column'): void {
-    this.cellEditor?.close()
-    this.growGrid(what)
-    const target = this.newestCell(what, this.activeGrid)
-    this.paint()
-    if (target && this.cellEditor?.openAt(this.activeGrid, target.row, target.column)) return
-    this.field.focus()
-    if (target) this.field.setSelectionRange(target.to, target.to)
-  }
-
-  /** Where the cell a grow just created is: last row, or last column. */
-  private newestCell(
-    what: 'row' | 'column',
-    grid: number
-  ): { row: number; column: number; to: number } | null {
-    const span = gridSpans(this.shell, this.field.value)[grid]
-    if (!span) return null
-    const cells = gridCells(this.field.value, span)
-    if (cells.length === 0) return null
-    const lastRow = Math.max(...cells.map((cell) => cell.row))
-    const lastColumn = Math.max(...cells.map((cell) => cell.column))
-    return (
-      cells.find((cell) =>
-        what === 'row'
-          ? cell.row === lastRow && cell.column === 0
-          : cell.row === 0 && cell.column === lastColumn
-      ) ?? null
-    )
+    this.remember()
   }
 
   private onInput(): void {
+    this.remember('type')
     this.schedulePaint()
     this.updateCompletions()
-    this.updateGridControls()
-  }
-
-  private updateGridControls(): void {
-    if (!this.gridControls) return
-    const spans = gridSpans(this.shell, this.field.value)
-    if (this.activeGrid >= spans.length) this.activeGrid = 0
-    this.gridControls.classList.toggle('block-editor__grid--off', spans.length === 0)
   }
 
   /**
@@ -423,6 +425,9 @@ export class FormulaEditor {
     const result = applyCompletion(this.field.value, query.from, caret, completion)
     this.code.value = result.value
     this.field.setSelectionRange(result.caret, result.caret)
+    // A completion is one step whatever its length, not a continuation of
+    // the `\wo` that opened the list.
+    this.remember()
     this.completions?.hide()
     this.field.focus()
     this.schedulePaint()

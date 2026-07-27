@@ -1286,16 +1286,6 @@
   opacity: 0.7;
 }
 
-.block-editor__grid {
-  display: inline-flex;
-  gap: 3px;
-}
-/* Row/column controls mean nothing outside a grid, but hiding them
-   entirely makes the bar jump every time a matrix is typed or deleted. */
-.block-editor__grid--off {
-  opacity: 0.3;
-  pointer-events: none;
-}
 .block-editor__button {
   display: inline-flex;
   align-items: center;

@@ -266,6 +266,17 @@ describe('a grid as offsets', () => {
     ])
   })
 
+  it('keeps a blank row that carries its own separators', () => {
+    // What adding a row makes. KaTeX draws it — two empty cells to click —
+    // and dropping it as punctuation left the new row unreachable.
+    expect(cellsOf('\\begin{pmatrix} a & b \\\\ & \\end{pmatrix}')).toEqual([
+      [0, 0, 'a'],
+      [0, 1, 'b'],
+      [1, 0, ''],
+      [1, 1, '']
+    ])
+  })
+
   it('leaves a short row short rather than padding it', () => {
     expect(cellsOf('\\begin{pmatrix} a & b \\\\ c \\end{pmatrix}')).toEqual([
       [0, 0, 'a'],

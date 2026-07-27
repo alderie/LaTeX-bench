@@ -430,24 +430,31 @@
 
 /* ── In-app window controls ───────────────────────────────────────────
    Minimise / maximise / close, drawn by the renderer because the window
-   is frameless. Sized on the Windows convention (46×32) so the hit areas
-   feel native, but coloured with the app's own tokens. */
+   is frameless.
+
+   These used to be 44×32 full-height slabs on the Windows convention, with
+   close painting a saturated red rectangle the whole height of the header.
+   Next to an otherwise rounded, quiet interface that reads as a piece of
+   somebody else's chrome pasted in. They're buttons in this app's own
+   idiom now: a small rounded square each, hover tint from the same token
+   as every other icon button, and a red that's a hover state rather than a
+   permanent block of colour. */
 .window-controls {
   display: flex;
   align-items: center;
-  align-self: stretch;
-  margin-left: 8px;
+  gap: 2px;
+  margin-left: 10px;
   -webkit-app-region: no-drag;
 }
 
 .window-control {
-  width: 44px;
-  height: 100%;
-  min-height: 32px;
+  width: 26px;
+  height: 26px;
   border: 0;
   padding: 0;
+  border-radius: 7px;
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--text-tertiary);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -461,18 +468,19 @@
 .window-control:active {
   background: var(--bg-secondary);
 }
-/* Close follows the platform convention of turning red on hover. */
+.window-control:focus-visible {
+  outline: 1px solid var(--accent-color, var(--text-secondary));
+  outline-offset: 1px;
+}
+/* Close still goes red, because that convention is worth keeping — but
+   only inside its own rounded box. */
 .window-control--close:hover {
-  background: #e81123;
+  background: #e5484d;
   color: #ffffff;
 }
 .window-control--close:active {
-  background: #f1707a;
+  background: #cc3a3f;
   color: #ffffff;
-}
-/* Lucide glyphs — leave anti-aliasing on, the strokes are rounded. */
-.window-control svg {
-  shape-rendering: auto;
 }
 
 /* Icon button — matches task-app's side-panel-icon-btn / panel-toggle-open. */
@@ -867,27 +875,33 @@
    Opened in place of a rendered display. The bar above the text area
    holds the parts of a formula that aren't maths — which environment it
    is, what it's labelled, how big the grid is — so the text area holds
-   only the maths. */
+   only the maths.
+
+   One surface, not four. The bar used to sit on its own fill with a rule
+   under it, the source on another, the preview on a third behind a dashed
+   divider — four horizontal lines stacked inside a bordered box, in a
+   panel whose whole job is to hold one formula. The fills are gone and the
+   remaining separators are the faintest thing that still reads as a
+   separation, so the eye goes to the maths rather than to the joinery. */
 .formula-editor {
   display: block;
   text-align: left;
   border: 1px solid var(--border-color);
-  border-radius: 6px;
+  border-radius: 8px;
   background: var(--bg-primary);
   overflow: hidden;
 }
 /* The bar's controls used to sit at 22px with hairline borders, which read
-   as decoration rather than as things to press. At 26px with a real fill
-   they carry the weight of the choices they hold — which environment this
-   is, and what it's called. `overflow: visible` so the environment list can
-   hang out of the bar. */
+   as decoration rather than as things to press. At 26px they carry the
+   weight of the choices they hold — which environment this is, and what
+   it's called. It shares the source area's background so the two read as
+   one panel. */
 .formula-editor__bar {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 7px;
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border-color);
+  padding: 8px 12px 6px;
+  background: transparent;
   font-family: var(--font-sans);
   font-size: 11px;
   color: var(--text-secondary);
@@ -913,14 +927,18 @@
   gap: 5px;
   height: 26px;
   padding: 0 8px;
-  border: 1px solid var(--border-color);
+  border: 1px solid transparent;
   border-radius: 6px;
-  background: var(--bg-primary);
+  background: transparent;
   color: var(--text-tertiary);
-  transition: border-color 0.12s ease, color 0.12s ease;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+.formula-editor__label:hover {
+  background: var(--overlay-hover);
 }
 .formula-editor__label:focus-within {
-  border-color: var(--text-tertiary);
+  background: var(--overlay-hover);
+  border-color: var(--border-color);
   color: var(--text-secondary);
 }
 /* Once the equation has a name, the caption is redundant — the value says it. */
@@ -971,27 +989,33 @@
   gap: 1px;
   height: 26px;
   padding: 0 7px;
-  border: 1px solid var(--border-color);
+  border: 1px solid transparent;
   border-radius: 6px;
-  background: var(--bg-primary);
-  color: var(--text-secondary);
+  background: transparent;
+  color: var(--text-tertiary);
   cursor: pointer;
   transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
 }
 .formula-editor__button:hover {
   background: var(--overlay-hover);
   color: var(--text-primary);
-  border-color: var(--text-tertiary);
 }
+/* `hidden` alone loses to the `display: inline-flex` above, so the source
+   toggle stayed on the bar for formulas that have no grid to toggle to. */
+.formula-editor__button[hidden] {
+  display: none;
+}
+/* A pressed toggle, not a call to action: the accent fill made this the
+   loudest thing in a panel whose subject is the formula. */
 .formula-editor__button--on {
-  background: var(--accent-color);
-  border-color: var(--accent-color);
-  color: var(--bg-primary);
+  background: var(--overlay-hover);
+  border-color: var(--border-color);
+  color: var(--text-primary);
 }
 .formula-editor__button--on:hover {
-  background: var(--accent-hover);
-  border-color: var(--accent-hover);
-  color: var(--bg-primary);
+  background: var(--overlay-hover);
+  border-color: var(--text-tertiary);
+  color: var(--text-primary);
 }
 .formula-editor__hint {
   font-size: 10px;
@@ -1006,7 +1030,7 @@
    A grid body edited as a grid. The dashed tracks on all four sides are
    the way to grow it: type in one and it becomes a real row or column. */
 .formula-editor__grid-host {
-  padding: 12px 14px;
+  padding: 6px 16px 14px;
   overflow-x: auto;
 }
 .matrix-grid {
@@ -1059,15 +1083,22 @@
   opacity: 1;
   border-color: var(--text-tertiary);
 }
+/* The source is the thing being worked on, so it gets the room: generous
+   padding, a slightly larger face than the surrounding prose's monospace,
+   and line spacing loose enough that subscripts and braces don't collide. */
 .formula-editor .math-block__editor {
   border: 0;
   border-radius: 0;
   background: transparent;
+  padding: 6px 16px 14px;
+  font-size: 13px;
+  line-height: 1.75;
 }
 .formula-editor .math-preview {
   margin-top: 0;
-  border-top: 1px dashed var(--border-color);
-  background: var(--bg-secondary);
+  padding: 14px 16px;
+  border-top: 1px solid var(--border-subtle, var(--border-color));
+  background: transparent;
 }
 .formula-editor--inline {
   display: inline;
@@ -1124,23 +1155,20 @@
   white-space: nowrap;
 }
 
+/* Fixed and mounted on the body: the control lives inside the scrolling
+   editor pane, which clips its overflow, so an absolutely-positioned list
+   was cut off at the pane's edge. `top`/`left`/`max-height` are set by
+   `dropdown.ts` against the button's viewport rect. */
 .ui-dropdown__menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
+  position: fixed;
   z-index: 430;
   min-width: 200px;
-  max-height: 280px;
   overflow-y: auto;
   padding: 4px;
   background: var(--bg-primary);
   border: 1px solid var(--border-color);
   border-radius: 8px;
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
-}
-.ui-dropdown--up .ui-dropdown__menu {
-  top: auto;
-  bottom: calc(100% + 4px);
 }
 .ui-dropdown__option {
   display: flex;

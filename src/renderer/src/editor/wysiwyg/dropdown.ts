@@ -8,10 +8,16 @@
 // here from plain DOM.
 //
 // Plain DOM (not React) for the same reason as the rest of `wysiwyg/`: this
-// lives inside ProseMirror node views, and the menu is deliberately mounted
-// *inside* its own element rather than on `document.body` — the formula
-// editor decides it is finished when focus leaves its subtree, and a menu
-// portalled to the body would look like leaving.
+// lives inside ProseMirror node views.
+//
+// The list is mounted on `document.body` and positioned `fixed`. Keeping it
+// inside the control was the obvious thing and it doesn't survive contact
+// with where this is used: the formula editor sits inside the scrolling
+// editor pane, which clips its overflow, so an open list was cut off at the
+// pane's edge — and the taller the list, the worse. Portalling is safe here
+// only because nothing in this control ever takes focus (every `mousedown`
+// is prevented), so the formula editor's "focus left my subtree, I'm done"
+// rule never fires because of us.
 
 import { createIcon, hasIcon, type IconName } from './icons'
 
@@ -64,7 +70,8 @@ export function createDropdown(options: DropdownOptions): Dropdown {
   menu.setAttribute('role', 'listbox')
   menu.hidden = true
 
-  root.append(button, menu)
+  root.appendChild(button)
+  document.body.appendChild(menu)
 
   function current(): DropdownOption | undefined {
     return options.options.find((o) => o.value === value)
@@ -149,16 +156,49 @@ export function createDropdown(options: DropdownOptions): Dropdown {
     menu.hidden = !next
     root.classList.toggle('ui-dropdown--open', next)
     button.setAttribute('aria-expanded', String(next))
-    if (next) {
-      active = Math.max(0, options.options.findIndex((o) => o.value === value))
-      renderMenu()
-      // Flip above the button when there isn't room below it — the bar sits
-      // near the bottom of the viewport as often as not.
-      const rect = button.getBoundingClientRect()
-      const room = window.innerHeight - rect.bottom
-      root.classList.toggle('ui-dropdown--up', room < menu.offsetHeight + 16)
+    if (!next) {
+      window.removeEventListener('scroll', onViewportChange, true)
+      window.removeEventListener('resize', onViewportChange)
+      return
     }
+    active = Math.max(0, options.options.findIndex((o) => o.value === value))
+    renderMenu()
+    position()
+    // A fixed menu doesn't follow its button, so scrolling the pane out from
+    // under it would leave the list floating over unrelated text.
+    window.addEventListener('scroll', onViewportChange, true)
+    window.addEventListener('resize', onViewportChange)
   }
+
+  /**
+   * Put the list next to its button, above it when there isn't room below,
+   * and capped to the room actually available on whichever side won — so it
+   * scrolls rather than running off the edge of the window.
+   */
+  function position(): void {
+    const MARGIN = 8
+    const GAP = 4
+    const rect = button.getBoundingClientRect()
+
+    menu.style.maxHeight = ''
+    menu.style.minWidth = `${Math.max(200, rect.width)}px`
+    // Measured while laid out but not yet painted, so a stale cap from a
+    // previous opening can't decide which side this one goes on.
+    menu.style.visibility = 'hidden'
+    const wanted = menu.offsetHeight
+    const width = menu.offsetWidth
+
+    const below = window.innerHeight - rect.bottom - GAP - MARGIN
+    const above = rect.top - GAP - MARGIN
+    const up = below < wanted && above > below
+
+    menu.style.top = up ? `${Math.max(MARGIN, rect.top - GAP - wanted)}px` : `${rect.bottom + GAP}px`
+    menu.style.maxHeight = `${Math.max(120, up ? above : below)}px`
+    menu.style.left = `${Math.max(MARGIN, Math.min(rect.left, window.innerWidth - width - MARGIN))}px`
+    menu.style.visibility = ''
+  }
+
+  const onViewportChange = (): void => setOpen(false)
 
   function move(direction: 1 | -1): void {
     const count = options.options.length
@@ -175,7 +215,7 @@ export function createDropdown(options: DropdownOptions): Dropdown {
   // The button never takes focus (see the mousedown above), so keys arrive
   // here by bubbling from whatever the caller left focused. Only intercept
   // them while the list is showing.
-  root.addEventListener('keydown', (event) => {
+  const onKeyDown = (event: KeyboardEvent): void => {
     if (!open) return
     switch (event.key) {
       case 'ArrowDown':
@@ -197,11 +237,16 @@ export function createDropdown(options: DropdownOptions): Dropdown {
         setOpen(false)
         break
     }
-  })
+  }
+  root.addEventListener('keydown', onKeyDown)
+  menu.addEventListener('keydown', onKeyDown)
 
   const onDocumentDown = (event: MouseEvent): void => {
     if (!open) return
-    if (root.contains(event.target as Node)) return
+    const target = event.target as Node
+    // The list lives on `document.body`, so "inside the control" is now two
+    // elements rather than one subtree.
+    if (root.contains(target) || menu.contains(target)) return
     setOpen(false)
   }
   document.addEventListener('mousedown', onDocumentDown, true)
@@ -221,6 +266,11 @@ export function createDropdown(options: DropdownOptions): Dropdown {
     },
     destroy() {
       document.removeEventListener('mousedown', onDocumentDown, true)
+      window.removeEventListener('scroll', onViewportChange, true)
+      window.removeEventListener('resize', onViewportChange)
+      // The menu is not inside `root` any more, so it has to go separately —
+      // otherwise closing a formula leaves its environment list on the page.
+      menu.remove()
       root.remove()
     }
   }

@@ -41,6 +41,9 @@
   --text-secondary: #6e6e73;
   --text-tertiary: #a0a0a5;
   --border-color: #e5e5ea;
+  /* For separations inside a single control, where a full border reads as
+     a seam between two panels rather than a division within one. */
+  --border-subtle: rgba(0, 0, 0, 0.06);
   --accent-color: #000000;
   --accent-hover: #333333;
   --panel-bg: #fafafa;
@@ -91,6 +94,7 @@
   --text-secondary: #a0a0a8;
   --text-tertiary: #6e6e75;
   --border-color: #2f2f33;
+  --border-subtle: rgba(255, 255, 255, 0.07);
   --accent-color: #ffffff;
   --accent-hover: #e0e0e0;
   --panel-bg: #202024;

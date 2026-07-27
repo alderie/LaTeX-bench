@@ -36,9 +36,11 @@ function chooseEnv(editor: FormulaEditor, value: string): void {
     new window.MouseEvent('mousedown', { bubbles: true, cancelable: true })
   const button = editor.dom.querySelector('.ui-dropdown__button') as HTMLButtonElement
   button.dispatchEvent(down())
+  // Searched from the document, not the editor: the list is mounted on
+  // `document.body` so the scrolling editor pane can't clip it.
   // Matched in JS rather than by attribute selector: the values include `\[`,
   // and jsdom's global has no CSS.escape to make that safe to interpolate.
-  const option = [...editor.dom.querySelectorAll('.ui-dropdown__option')].find(
+  const option = [...document.querySelectorAll('.ui-dropdown__option')].find(
     (row) => (row as HTMLElement).dataset.value === value
   ) as HTMLElement
   option.dispatchEvent(down())
@@ -169,6 +171,37 @@ describe('formula editor', () => {
       field.dispatchEvent(new window.Event('input'))
       const controls = editor.dom.querySelector('.formula-editor__grid')
       expect(controls?.classList.contains('formula-editor__grid--off')).toBe(false)
+    })
+  })
+
+  describe('the environment list', () => {
+    it('is mounted outside the editor so nothing can clip it', () => {
+      // The formula editor sits inside the scrolling editor pane, which
+      // clips its overflow: an in-place list was cut off at the pane's edge.
+      const { editor } = open()
+      const button = editor.dom.querySelector('.ui-dropdown__button') as HTMLButtonElement
+      button.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+      const menu = document.querySelector('.ui-dropdown__menu') as HTMLElement
+      expect(menu.hidden).toBe(false)
+      expect(editor.dom.contains(menu)).toBe(false)
+      expect(menu.parentElement).toBe(document.body)
+    })
+
+    it('goes away with the editor rather than being left on the page', () => {
+      const { editor } = open()
+      const button = editor.dom.querySelector('.ui-dropdown__button') as HTMLButtonElement
+      button.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+      expect(document.querySelector('.ui-dropdown__menu')).not.toBeNull()
+      editor.destroy()
+      expect(document.querySelector('.ui-dropdown__menu')).toBeNull()
+    })
+
+    it('closes when a click lands outside both the button and the list', () => {
+      const { editor } = open()
+      const button = editor.dom.querySelector('.ui-dropdown__button') as HTMLButtonElement
+      button.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+      document.body.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true }))
+      expect((document.querySelector('.ui-dropdown__menu') as HTMLElement).hidden).toBe(true)
     })
   })
 

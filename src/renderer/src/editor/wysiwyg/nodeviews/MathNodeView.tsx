@@ -68,6 +68,8 @@ class MathView implements NodeView {
         this.dom.removeAttribute('id')
       }
     }
+    const labels = this.displayMode ? collectLabels(rawLatex, this.node.attrs.label) : []
+    this.dom.classList.toggle('math-block--labelled', labels.length > 0)
     try {
       katex.render(latex, this.dom, {
         throwOnError: false,
@@ -85,22 +87,38 @@ class MathView implements NodeView {
       this.dom.style.color = 'var(--status-error)'
       this.dom.title = (err as Error).message
     }
+    // After KaTeX, which owns the element's children.
+    if (labels.length > 0) this.dom.appendChild(buildLabelChip(labels))
   }
 
   private openEditor(): void {
     this.editing = true
     this.dom.replaceChildren()
+    // The chip named the closed block; the editor has a label field of its own.
+    this.dom.classList.remove('math-block--labelled')
     this.dom.classList.add(this.displayMode ? 'math-block--editing' : 'math-inline--editing')
 
     const editor = new FormulaEditor({
       latex: this.node.attrs.latex as string,
       displayMode: this.displayMode,
       onCommit: (latex) => this.closeEditor(latex),
-      onCancel: () => this.closeEditor(null)
+      onCancel: () => this.closeEditor(null),
+      onDelete: () => this.deleteSelf()
     })
     this.editor = editor
     this.dom.appendChild(editor.dom)
     editor.focus()
+  }
+
+  /** Remove the formula from the document, editor and all. */
+  private deleteSelf(): void {
+    this.editing = false
+    this.editor?.destroy()
+    this.editor = null
+    const pos = this.getPos()
+    if (typeof pos !== 'number') return
+    this.view.dispatch(this.view.state.tr.delete(pos, pos + this.node.nodeSize))
+    this.view.focus()
   }
 
   /** Leave editing mode, writing `latex` back to the node when it changed. */
@@ -155,6 +173,42 @@ class MathView implements NodeView {
     this.unsubscribe?.()
     this.unsubscribe = null
   }
+}
+
+/**
+ * Every name this block can be cross-referenced by, in source order: the
+ * per-line `\label{}`s an `align` carries plus the node's own primary label.
+ */
+function collectLabels(rawLatex: string, primary: unknown): string[] {
+  const out: string[] = []
+  for (const m of rawLatex.matchAll(/\\label\{([^}]*)\}/g)) {
+    const key = m[1].trim()
+    if (key && !out.includes(key)) out.push(key)
+  }
+  if (typeof primary === 'string' && primary.trim() && !out.includes(primary.trim())) {
+    out.push(primary.trim())
+  }
+  return out
+}
+
+/**
+ * A labelled equation is one another part of the paper can point at, and
+ * nothing in the rendered output says so — the number KaTeX prints is the
+ * same one an unlabelled `equation` gets. The chip names it, quietly: dim
+ * until the block is hovered, and out of the formula's way in the corner.
+ */
+function buildLabelChip(labels: string[]): HTMLElement {
+  const chip = document.createElement('span')
+  chip.className = 'math-block__label-chip'
+  chip.textContent = `#${labels[0]}`
+  if (labels.length > 1) {
+    const more = document.createElement('span')
+    more.className = 'math-block__label-chip-more'
+    more.textContent = `+${labels.length - 1}`
+    chip.appendChild(more)
+  }
+  chip.title = labels.length > 1 ? `Labels: ${labels.join(', ')}` : `Label: ${labels[0]}`
+  return chip
 }
 
 function stripWrappers(latex: string, displayMode: boolean): string {

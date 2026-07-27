@@ -22,6 +22,7 @@ import { captionNodeView } from './nodeviews/CaptionNodeView'
 import { footnoteNodeView } from './nodeviews/FootnoteNodeView'
 import { mathInlineInputRule, mathBlockInputRule } from './inputRules'
 import { slashMenu } from './slashMenu'
+import { blockDeleteKeymap, blockHandle } from './block-delete'
 import { publishSelection, setActiveEditorView } from './editor-bridge'
 import * as labelRegistry from './labelRegistry'
 import { usePaperStore } from '../../stores/paperStore'
@@ -73,7 +74,12 @@ export function WysiwygEditor(): React.JSX.Element {
           slashMenu(),
           inputRules({ rules: [mathInlineInputRule, mathBlockInputRule] }),
           keymap({ 'Mod-z': undo, 'Mod-y': redo, 'Mod-Shift-z': redo }),
+          // Ahead of the base keymap, which answers Backspace with
+          // `joinBackward` — a no-op at the top of a `defining` block like a
+          // theorem, so an emptied one could never be got rid of.
+          keymap(blockDeleteKeymap),
           keymap(baseKeymap),
+          blockHandle(),
           markChanges()
         ]
       })

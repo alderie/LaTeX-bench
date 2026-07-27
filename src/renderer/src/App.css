@@ -568,12 +568,48 @@
 /* ── WYSIWYG editor ───────────────────────────────────────────────── */
 
 .wysiwyg-editor {
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   background: var(--paper-bg);
   display: flex;
   justify-content: center;
+}
+
+/* The delete handle rides the margin beside whichever block the pointer is
+   over. Absolutely positioned inside the scrolling host rather than fixed to
+   the viewport, so it scrolls with the block it belongs to instead of sliding
+   across the page. `block-delete.ts` sets top/left. */
+.block-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+.block-handle--on {
+  opacity: 0.5;
+  pointer-events: auto;
+}
+.block-handle--on:hover {
+  opacity: 1;
+  color: var(--status-error, #e05252);
+  background: var(--overlay-hover);
+  border-color: var(--border-color);
 }
 
 .wysiwyg-editor .ProseMirror {
@@ -948,22 +984,141 @@
 .formula-editor__label--set {
   color: var(--text-secondary);
 }
+/* The icon, the caption and the field all carry different font metrics, so
+   centring the flex boxes alone leaves the text visibly stepped. Give each one
+   the same line box and let align-items do the rest. */
+.formula-editor__label > svg {
+  display: block;
+  flex: none;
+}
 .formula-editor__label-caption {
   font-size: 10px;
   font-weight: 600;
+  line-height: 16px;
   letter-spacing: 0.05em;
   text-transform: uppercase;
 }
 .formula-editor__label-input {
   width: 11ch;
+  margin: 0;
+  padding: 0;
   border: 0;
   outline: none;
   background: transparent;
   color: var(--text-primary);
   font-family: var(--font-mono);
   font-size: 11.5px;
+  line-height: 16px;
 }
 .formula-editor__label-input::placeholder {
+  color: var(--text-tertiary);
+  opacity: 0.7;
+}
+
+/* ── Header fields ───────────────────────────────────────────────────
+   The same field, generalised, for any block header that carries a piece of
+   metadata — see `nodeviews/header-field.ts`. A caption while it is empty,
+   the value once it has one, chrome only under the pointer or the caret.
+
+   The box is a one-cell grid holding the input and an invisible copy of its
+   value, so the field is exactly as wide as what it holds: a fixed width is
+   wrong in both directions when the values run from "Setup" to most of a
+   line. Both layers have to agree on font and padding or the field drifts a
+   pixel per character.
+
+   Sized in `em` throughout, so one of these is whatever its bar is: 24px in
+   a header set at 11px, and still proportionate inside a paper the author
+   has zoomed to 200%. */
+.head-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45em;
+  flex: 0 1 auto;
+  min-width: 0;
+  height: 2.2em;
+  padding: 0 0.6em;
+  border: 1px solid transparent;
+  border-radius: 0.5em;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: text;
+  transition: opacity 0.12s ease, background 0.12s ease, border-color 0.12s ease,
+    color 0.12s ease;
+}
+.head-field:hover {
+  background: var(--overlay-hover);
+}
+.head-field:focus-within {
+  background: var(--math-edit-soft);
+  border-color: var(--math-edit);
+  color: var(--text-secondary);
+}
+.head-field > svg {
+  display: block;
+  flex: none;
+}
+.head-field__caption {
+  font-family: var(--font-sans);
+  font-size: 0.9em;
+  font-weight: 600;
+  line-height: 1.45em;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+/* Once the field has a value the caption is redundant, and while it is being
+   typed into, the placeholder says the same word in the same place. */
+.head-field--set .head-field__caption,
+.head-field:focus-within .head-field__caption {
+  display: none;
+}
+.head-field__box {
+  display: inline-grid;
+  min-width: 0;
+  max-width: min(34ch, 100%);
+}
+/* Room to type in before there is anything to measure. */
+.head-field:focus-within .head-field__box {
+  min-width: 8ch;
+}
+.head-field__box::after,
+.head-field__input {
+  grid-area: 1 / 1;
+  box-sizing: content-box;
+  width: auto;
+  min-width: 0;
+  /* Somewhere for the caret to sit at the end of the value. */
+  padding: 0 0.18em 0 0;
+  font-family: var(--font-sans);
+  font-size: 1.05em;
+  font-weight: 500;
+  line-height: 1.4em;
+  letter-spacing: normal;
+  text-transform: none;
+}
+/* Identifiers — labels, keys — rather than prose. */
+.head-field--mono .head-field__box::after,
+.head-field--mono .head-field__input {
+  font-family: var(--font-mono);
+  font-size: 1em;
+}
+.head-field__box::after {
+  content: attr(data-value);
+  /* `pre` so leading and trailing spaces in a value still take their width. */
+  white-space: pre;
+  visibility: hidden;
+  overflow: hidden;
+}
+.head-field__input {
+  margin: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text-primary);
+  caret-color: var(--math-edit);
+  text-overflow: ellipsis;
+}
+.head-field__input::placeholder {
   color: var(--text-tertiary);
   opacity: 0.7;
 }
@@ -1016,6 +1171,14 @@
   background: var(--overlay-hover);
   border-color: var(--text-tertiary);
   color: var(--text-primary);
+}
+/* Last on the bar and quiet until you reach for it. */
+.formula-editor__button--danger {
+  padding: 0 6px;
+  margin-left: 2px;
+}
+.formula-editor__button--danger:hover {
+  color: var(--status-error, #e05252);
 }
 .formula-editor__hint {
   font-size: 10px;
@@ -1179,6 +1342,12 @@
   cursor: pointer;
   color: var(--text-primary);
   font-size: 12px;
+}
+/* No option in the list has a glyph, so there's no icon column to leave room
+   for and the rows can sit closer together. */
+.ui-dropdown__menu--plain .ui-dropdown__option {
+  gap: 0;
+  padding: 5px 9px;
 }
 .ui-dropdown__option--active {
   background: var(--overlay-hover);
@@ -1386,6 +1555,7 @@
 }
 .math-inline:hover { background: var(--overlay-hover); }
 .math-block {
+  position: relative;
   display: block;
   margin: 1em 0;
   padding: 6px 8px;
@@ -1394,6 +1564,44 @@
   border-radius: 4px;
 }
 .math-block:hover { background: var(--overlay-hover); }
+
+/* A labelled equation is one the rest of the paper can point at, but the
+   rendered output looks identical to an unlabelled one. The chip names it in
+   the corner — dim enough to read past, legible when you look for it. The
+   strip it sits in is taken out of the block's top margin, so adding a label
+   doesn't shift the paragraph spacing around the formula. */
+.math-block--labelled {
+  padding-top: 18px;
+  margin-top: calc(1em - 12px);
+}
+.math-block__label-chip {
+  position: absolute;
+  top: 3px;
+  left: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: calc(100% - 16px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 12px;
+  color: var(--text-tertiary);
+  opacity: 0.55;
+  pointer-events: none;
+  transition: opacity 0.12s ease, color 0.12s ease;
+}
+.math-block:hover .math-block__label-chip {
+  opacity: 1;
+  color: var(--text-secondary);
+}
+.math-block__label-chip-more {
+  padding: 0 3px;
+  border-radius: 3px;
+  background: var(--overlay-hover);
+}
 /* While the editor is open the block is a container, not a target: the
    hover tint and the pointer cursor both belong to the closed state. */
 .math-block--editing,
@@ -1848,97 +2056,109 @@
   border-left-color: var(--text-tertiary);
   background: transparent;
 }
-/* The header is a real element rather than a `::before`, so the kind and
-   the title can be clicked and changed in place. */
+/* ── The theorem header bar ──────────────────────────────────────────
+   One bar, laid out like the formula editor's: same-height segments on a
+   shared centre line, each with its own hover surface, and nothing drawing
+   a box until the pointer is on it. What it replaced was four controls at
+   four different heights in three fonts — a dropdown, a bare span, a
+   click-to-edit button, and a second button for naming an untitled one —
+   which is why the open name field never lined up with anything beside it.
+
+   Centred rather than baseline-aligned: several items here are inline-flex
+   boxes whose first child is an icon, and an inline-flex takes its baseline
+   from that first child, which pushes its text a few pixels below the rest
+   of the row. */
 .wysiwyg-editor .ProseMirror .theorem-head {
   display: flex;
-  align-items: baseline;
-  gap: 0.35em;
+  align-items: center;
+  gap: 0.15em;
   flex-wrap: wrap;
+  /* The segments carry their own padding, so the row is pulled back by that
+     much — the kind still starts on the body text's left edge. */
+  margin: -0.2em -0.6em 0.35em;
   font-family: var(--font-sans);
-  font-size: 0.75em;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-primary);
-  margin-bottom: 0.4em;
+  /* Relative to the paper, not to the window: this header is part of what is
+     being read, and it has to keep its proportions when the author zooms. */
+  font-size: 0.7em;
+  font-weight: 500;
+  color: var(--text-secondary);
   user-select: none;
 }
+/* The kind reads as the word it is — the dropdown's chrome only shows up
+   under the pointer, so a page of theorems isn't a page of controls. */
 .wysiwyg-editor .ProseMirror .theorem-head__kind {
   font: inherit;
-  text-transform: inherit;
-  letter-spacing: inherit;
-  color: inherit;
+}
+.wysiwyg-editor .ProseMirror .theorem-head__kind .ui-dropdown__button {
+  font-family: inherit;
+  font-size: 1em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-primary);
+  height: 2.2em;
+  gap: 0.25em;
+  padding: 0 0.6em;
+  margin: 0;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 3px;
-  padding: 0 1px;
-  margin: 0 -1px;
-  cursor: pointer;
-  appearance: none;
-  -webkit-appearance: none;
+  border-radius: 0.5em;
 }
-.wysiwyg-editor .ProseMirror .theorem-head__kind:hover,
-.wysiwyg-editor .ProseMirror .theorem-head__kind:focus-visible {
+.wysiwyg-editor .ProseMirror .theorem-head__kind .ui-dropdown__button:hover,
+.wysiwyg-editor .ProseMirror .theorem-head__kind.ui-dropdown--open .ui-dropdown__button {
   background: var(--overlay-hover);
   border-color: var(--border-color);
-  outline: none;
 }
-.wysiwyg-editor .ProseMirror .theorem-head__number:empty { display: none; }
-.wysiwyg-editor .ProseMirror .theorem-head__title,
-.wysiwyg-editor .ProseMirror .theorem-head__add {
-  font: inherit;
-  text-transform: inherit;
-  letter-spacing: inherit;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 3px;
-  padding: 0 3px;
-  margin: 0 -3px;
-  cursor: text;
-}
-.wysiwyg-editor .ProseMirror .theorem-head__title {
-  color: var(--text-secondary);
-  font-weight: 600;
-}
-.wysiwyg-editor .ProseMirror .theorem-head__title:hover,
-.wysiwyg-editor .ProseMirror .theorem-head__title:focus-visible {
-  background: var(--overlay-hover);
-  border-color: var(--border-color);
-  outline: none;
-}
-/* Most theorems have no title, and a permanent "+ name" on every one of
-   them would be noise. It appears when the pointer is over the theorem, or
-   whenever it is keyboard-focused. */
-.wysiwyg-editor .ProseMirror .theorem-head__add {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  color: var(--text-tertiary);
+/* The chevron is a hint that the word can be changed, not part of the word. */
+.wysiwyg-editor .ProseMirror .theorem-head__kind .ui-dropdown__button > svg:last-child {
   opacity: 0;
   transition: opacity 0.12s ease;
 }
-.wysiwyg-editor .ProseMirror aside[data-theorem]:hover .theorem-head__add,
-.wysiwyg-editor .ProseMirror .theorem-head__add:focus-visible {
+.wysiwyg-editor .ProseMirror aside[data-theorem]:hover .theorem-head__kind .ui-dropdown__button > svg:last-child,
+.wysiwyg-editor .ProseMirror .theorem-head__kind.ui-dropdown--open .ui-dropdown__button > svg:last-child {
   opacity: 1;
-  outline: none;
 }
-.wysiwyg-editor .ProseMirror .theorem-head__add:hover {
+/* The number belongs to the kind, so it sits tight against it rather than a
+   segment's width away. */
+.wysiwyg-editor .ProseMirror .theorem-head__number {
+  font-family: var(--font-mono);
+  font-size: 1em;
   color: var(--text-secondary);
-  background: var(--overlay-hover);
+  margin-left: -0.25em;
+  padding: 0 0.15em;
 }
-.wysiwyg-editor .ProseMirror .theorem-head__input {
-  font: inherit;
-  text-transform: none;
-  letter-spacing: normal;
+.wysiwyg-editor .ProseMirror .theorem-head__number:empty { display: none; }
+/* What the environment is, on the left; what this one is called, on the
+   right. One hairline says it without a second row or a second fill. */
+.wysiwyg-editor .ProseMirror .theorem-head__rule {
+  flex: none;
+  width: 1px;
+  height: 1.2em;
+  margin: 0 0.35em;
+  background: var(--border-color);
+  opacity: 0.7;
+}
+.wysiwyg-editor .ProseMirror .theorem-head__spacer {
+  flex: 1 1 1em;
+}
+/* An empty field is an offer, not a control, so it keeps its place in the row
+   and stays invisible until the pointer is on the theorem or the caret is in
+   it — the same rule the delete button follows. */
+.wysiwyg-editor .ProseMirror .theorem-head .head-field:not(.head-field--set) {
+  opacity: 0;
+}
+.wysiwyg-editor .ProseMirror aside[data-theorem]:hover .theorem-head .head-field,
+.wysiwyg-editor .ProseMirror .theorem-head .head-field:focus-within {
+  opacity: 1;
+}
+/* The name is the header's own text once it has one: the same size as the
+   kind beside it, in the document's colour rather than the chrome's. */
+.wysiwyg-editor .ProseMirror .theorem-head__name .head-field__input,
+.wysiwyg-editor .ProseMirror .theorem-head__name .head-field__box::after {
+  font-weight: 600;
+}
+.wysiwyg-editor .ProseMirror .theorem-head__name .head-field__input {
   color: var(--text-primary);
-  background: var(--bg-primary);
-  border: 1px solid var(--accent-color, var(--border-color));
-  border-radius: 3px;
-  padding: 0 4px;
-  min-width: 8ch;
-  width: 18ch;
-  outline: none;
 }
 .wysiwyg-editor .ProseMirror .theorem-body > p:first-of-type { margin-top: 0; }
 .wysiwyg-editor .ProseMirror .theorem-body > p:last-of-type { margin-bottom: 0; }

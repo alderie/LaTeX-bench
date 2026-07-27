@@ -6,7 +6,8 @@ import type {
   ViewMutationRecord
 } from 'prosemirror-view'
 import { getLabel, subscribe } from '../labelRegistry'
-import { createIcon } from '../icons'
+import { createDropdown, type Dropdown, type DropdownOption } from '../dropdown'
+import { createHeaderField, type HeaderField } from './header-field'
 
 // Node view for theorem-like environments.
 //
@@ -19,9 +20,23 @@ import { createIcon } from '../icons'
 // they are how the thing is referred to in prose — so they need to be
 // reachable where they are read.
 //
-// So the header is a real element now: the kind is a `<select>`, the title is
-// click-to-edit, and an untitled theorem grows a quiet "name it" button on
-// hover. The body below stays the `contentDOM`, fully editable as before.
+// The first pass at that gave every part its own kind of control: a dropdown
+// for the kind, a bare span for the number, a button for the title that
+// swapped itself for an input on click, and a second button for naming an
+// untitled one. Four widgets, four heights, three fonts — a row of loose
+// parts rather than a header, with the open name field sitting visibly
+// off-centre against everything beside it.
+//
+// So it is one bar now, built the way the formula editor's is: same-height
+// segments on a shared centre line, chrome that shows up only under the
+// pointer or the caret. The kind is a dropdown, the number is text, and the
+// name and the label are both `head-field`s — live inputs rather than
+// click-to-edit, because something that already looks like a field needs no
+// ceremony to start typing into. The body below stays the `contentDOM`.
+//
+// The kind picker is the app's own dropdown rather than a `<select>`: a native
+// popup is drawn by the OS, so it arrived light-on-white in a dark editor, in
+// the system font, at the system's idea of a row height — see `dropdown.ts`.
 
 /** Kinds always on offer, regardless of what the document already uses. */
 const BASE_KINDS = ['theorem', 'lemma', 'proposition', 'corollary', 'definition', 'remark', 'proof']
@@ -30,13 +45,12 @@ class TheoremView implements NodeView {
   dom: HTMLElement
   contentDOM: HTMLElement
   private head: HTMLElement
-  private kindSelect: HTMLSelectElement
+  private kindPicker: Dropdown
   private numberSlot: HTMLElement
-  private titleSlot: HTMLElement
+  private nameField: HeaderField
+  private labelField: HeaderField
   private unsubscribe: () => void
-  private editing = false
   private kindsLoaded = false
-  private closeRename: (() => void) | null = null
 
   constructor(
     private node: PMNode,
@@ -49,15 +63,55 @@ class TheoremView implements NodeView {
     this.head = document.createElement('header')
     this.head.className = 'theorem-head'
     // The header is chrome, not prose. Without this the caret can be placed
-    // between the kind and the title, where typing goes nowhere.
+    // between the kind and the name, where typing goes nowhere.
     this.head.contentEditable = 'false'
 
-    this.kindSelect = this.buildKindSelect()
+    this.kindPicker = this.buildKindPicker()
+
     this.numberSlot = document.createElement('span')
     this.numberSlot.className = 'theorem-head__number'
-    this.titleSlot = document.createElement('span')
-    this.titleSlot.className = 'theorem-head__title-slot'
-    this.head.append(this.kindSelect, this.numberSlot, this.titleSlot)
+
+    // What the environment *is* on the left of the rule; what this particular
+    // one is called on the right.
+    const rule = document.createElement('span')
+    rule.className = 'theorem-head__rule'
+
+    this.nameField = createHeaderField({
+      caption: 'name',
+      placeholder: 'name',
+      value: (this.node.attrs.title as string | null) ?? null,
+      title: 'Name shown after the number — Theorem 3.5 (Bregman divergence)',
+      onCommit: (value) => this.setAttr({ title: value }),
+      onDone: () => this.view.focus()
+    })
+    this.nameField.dom.classList.add('theorem-head__name')
+
+    const spacer = document.createElement('span')
+    spacer.className = 'theorem-head__spacer'
+
+    // Same field, same bar: a theorem is cross-referenced exactly as an
+    // equation is, and until now the only way to give one a label was to open
+    // the source view and write the `\label{}` by hand.
+    this.labelField = createHeaderField({
+      caption: 'label',
+      placeholder: 'thm:name',
+      icon: 'tag',
+      mono: true,
+      value: (this.node.attrs.label as string | null) ?? null,
+      title: 'Reference name for \\ref and \\cref',
+      onCommit: (value) => this.setAttr({ label: value }),
+      onDone: () => this.view.focus()
+    })
+    this.labelField.dom.classList.add('theorem-head__label')
+
+    this.head.append(
+      this.kindPicker.dom,
+      this.numberSlot,
+      rule,
+      this.nameField.dom,
+      spacer,
+      this.labelField.dom
+    )
 
     this.contentDOM = document.createElement('div')
     this.contentDOM.className = 'theorem-body'
@@ -86,12 +140,7 @@ class TheoremView implements NodeView {
     if (title) this.dom.setAttribute('data-title', title)
     else this.dom.removeAttribute('data-title')
 
-    if (this.kindSelect.value !== kind) {
-      if (!this.kindSelect.querySelector(`option[value="${cssEscape(kind)}"]`)) {
-        this.kindSelect.appendChild(optionFor(kind))
-      }
-      this.kindSelect.value = kind
-    }
+    this.kindPicker.setValue(kind)
 
     let number: string | null = null
     if (label) {
@@ -106,93 +155,10 @@ class TheoremView implements NodeView {
     else this.dom.removeAttribute('data-number')
     this.numberSlot.textContent = number ?? ''
 
-    // Never redraw the title out from under a rename in progress.
-    if (!this.editing) this.renderTitle(title)
-  }
-
-  private renderTitle(title: string | null): void {
-    this.titleSlot.replaceChildren()
-    if (title) {
-      const button = document.createElement('button')
-      button.type = 'button'
-      button.className = 'theorem-head__title'
-      button.title = 'Click to rename'
-      button.textContent = `(${title})`
-      button.addEventListener('mousedown', (event) => event.preventDefault())
-      button.addEventListener('click', () => this.startRename(title))
-      this.titleSlot.appendChild(button)
-      return
-    }
-    // Untitled is the common case, so the affordance stays out of the way
-    // until the pointer is over the theorem (see `.theorem-head__add`).
-    const add = document.createElement('button')
-    add.type = 'button'
-    add.className = 'theorem-head__add'
-    add.title = 'Give this theorem a name'
-    add.appendChild(createIcon('plus', 11))
-    const text = document.createElement('span')
-    text.textContent = 'name'
-    add.appendChild(text)
-    add.addEventListener('mousedown', (event) => event.preventDefault())
-    add.addEventListener('click', () => this.startRename(''))
-    this.titleSlot.appendChild(add)
-  }
-
-  // ── Renaming ───────────────────────────────────────────────────────────
-
-  private startRename(initial: string): void {
-    this.editing = true
-    this.titleSlot.replaceChildren()
-
-    const input = document.createElement('input')
-    input.type = 'text'
-    input.className = 'theorem-head__input'
-    input.value = initial
-    input.placeholder = 'name'
-    input.spellcheck = false
-    this.titleSlot.appendChild(input)
-    input.focus()
-    input.select()
-
-    let done = false
-    const finish = (commit: boolean): void => {
-      if (done) return
-      done = true
-      this.editing = false
-      this.closeRename = null
-      document.removeEventListener('pointerdown', onPointerDown, true)
-      const next = commit ? input.value.trim() : initial.trim()
-      this.renderTitle(next === '' ? null : next)
-      if (commit && next !== initial.trim()) this.writeTitle(next === '' ? null : next)
-    }
-
-    // Same reason as the sidebar rename: plenty of handlers in this app call
-    // `preventDefault()` on mousedown so they don't steal focus, and those
-    // clicks never produce a blur. Closing on pointerdown catches them.
-    const onPointerDown = (event: Event): void => {
-      if (event.target instanceof Node && input.contains(event.target)) return
-      finish(true)
-    }
-    document.addEventListener('pointerdown', onPointerDown, true)
-
-    input.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') {
-        event.preventDefault()
-        finish(true)
-        this.view.focus()
-      } else if (event.key === 'Escape') {
-        event.preventDefault()
-        finish(false)
-        this.view.focus()
-      }
-      event.stopPropagation()
-    })
-    input.addEventListener('blur', () => finish(true))
-    this.closeRename = () => finish(true)
-  }
-
-  private writeTitle(title: string | null): void {
-    this.setAttr({ title })
+    // Each field ignores this while it holds the caret, so a rename in
+    // progress is never redrawn out from under the author.
+    this.nameField.setValue(title)
+    this.labelField.setValue(label)
   }
 
   private setAttr(patch: Record<string, unknown>): void {
@@ -205,19 +171,22 @@ class TheoremView implements NodeView {
 
   // ── The kind picker ────────────────────────────────────────────────────
 
-  private buildKindSelect(): HTMLSelectElement {
-    const select = document.createElement('select')
-    select.className = 'theorem-head__kind'
-    select.title = 'Environment'
-    select.appendChild(optionFor((this.node.attrs.kind as string) || 'theorem'))
-    // Filled in on first interaction: working out which kinds are available
-    // means walking the document, and doing that once per theorem at load
-    // time would cost O(theorems × document).
-    const load = (): void => this.loadKinds()
-    select.addEventListener('pointerdown', load)
-    select.addEventListener('focus', load)
-    select.addEventListener('change', () => this.setAttr({ kind: select.value }))
-    return select
+  private buildKindPicker(): Dropdown {
+    const kind = (this.node.attrs.kind as string) || 'theorem'
+    const picker = createDropdown({
+      className: 'theorem-head__kind',
+      title: 'Environment',
+      menuMinWidth: 150,
+      value: kind,
+      options: [optionFor(kind)],
+      onChange: (next) => this.setAttr({ kind: next })
+    })
+    // The full list is filled in on first interaction: working out which kinds
+    // are available means walking the document, and doing that once per
+    // theorem at load time would cost O(theorems × document). `pointerdown`
+    // runs before the button's own `mousedown` opens the menu.
+    picker.dom.addEventListener('pointerdown', () => this.loadKinds())
+    return picker
   }
 
   /**
@@ -237,9 +206,7 @@ class TheoremView implements NodeView {
     this.view.state.doc.descendants((node) => {
       if (node.type.name === 'theoremEnv') kinds.add(node.attrs.kind as string)
     })
-    const current = this.kindSelect.value
-    this.kindSelect.replaceChildren(...[...kinds].sort().map(optionFor))
-    this.kindSelect.value = current
+    this.kindPicker.setOptions([...kinds].sort().map(optionFor))
   }
 
   // ── ProseMirror plumbing ───────────────────────────────────────────────
@@ -252,27 +219,26 @@ class TheoremView implements NodeView {
 
   ignoreMutation(mutation: ViewMutationRecord): boolean {
     // Our own `data-*` bookkeeping, and anything the header does to itself —
-    // including a selection landing in the rename field.
+    // including a selection landing in one of its fields.
     if (mutation.type === 'attributes' && mutation.target === this.dom) return true
     return this.head.contains(mutation.target)
   }
 
   destroy(): void {
-    this.closeRename?.()
+    // The theorem can be torn down with a half-typed name still in the field;
+    // write it out rather than dropping it. `setAttr` bails when the node has
+    // genuinely gone away.
+    this.nameField.commit()
+    this.labelField.commit()
+    // The menu is portalled onto `document.body`, so it outlives the node view
+    // unless it's told not to.
+    this.kindPicker.destroy()
     this.unsubscribe()
   }
 }
 
-function optionFor(kind: string): HTMLOptionElement {
-  const option = document.createElement('option')
-  option.value = kind
-  option.textContent = kind
-  return option
-}
-
-/** Enough escaping for a `[value="…"]` lookup over environment names. */
-function cssEscape(value: string): string {
-  return value.replace(/["\\]/g, '\\$&')
+function optionFor(kind: string): DropdownOption {
+  return { value: kind, label: kind.charAt(0).toUpperCase() + kind.slice(1) }
 }
 
 export const theoremNodeView: NodeViewConstructor = (node, view, getPos) =>

@@ -177,6 +177,11 @@ const ICONS: Record<string, Shape[]> = {
     ['path', { d: 'M4 15h16' }],
     ['path', { d: 'M10 3 8 21' }],
     ['path', { d: 'M16 3l-2 18' }]
+  ],
+  trash: [
+    ['path', { d: 'M4 7h16' }],
+    ['path', { d: 'M10 4h4' }],
+    ['path', { d: 'M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12' }]
   ]
 }
 

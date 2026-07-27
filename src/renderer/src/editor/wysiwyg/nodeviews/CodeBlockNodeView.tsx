@@ -75,7 +75,12 @@ class CodeBlockView implements NodeView {
     })
     ta.addEventListener('input', autoSize)
 
+    // The textarea is not part of the document ProseMirror manages, so the
+    // keymap that deletes an empty block never sees a key pressed in here.
+    let removed = false
+
     const commit = (): void => {
+      if (removed) return
       const next = ta.value
       this.editing = false
       this.dom.classList.remove('code-block--editing')
@@ -90,6 +95,18 @@ class CodeBlockView implements NodeView {
     }
     ta.addEventListener('blur', commit)
     ta.addEventListener('keydown', (e) => {
+      // Backspace with nothing left to delete takes the listing itself, the
+      // same way it does in every other empty block.
+      if ((e.key === 'Backspace' || e.key === 'Delete') && ta.value === '') {
+        e.preventDefault()
+        const pos = this.getPos()
+        if (typeof pos !== 'number') return
+        removed = true
+        this.editing = false
+        this.view.dispatch(this.view.state.tr.delete(pos, pos + this.node.nodeSize))
+        this.view.focus()
+        return
+      }
       if (e.key === 'Escape') {
         e.preventDefault()
         ta.blur()

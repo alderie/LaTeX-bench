@@ -37,6 +37,8 @@ export interface DropdownOptions {
   className?: string
   /** Tooltip and accessible name for the button. */
   title?: string
+  /** Floor for the popup's width, in px. Defaults to 200. */
+  menuMinWidth?: number
   onChange: (value: string) => void
 }
 
@@ -44,6 +46,11 @@ export interface Dropdown {
   readonly dom: HTMLElement
   /** Reflect a value chosen elsewhere, without firing `onChange`. */
   setValue: (value: string) => void
+  /**
+   * Replace the choices. For lists that are expensive to work out and so are
+   * filled in when the control is first opened rather than when it is built.
+   */
+  setOptions: (options: DropdownOption[]) => void
   close: () => void
   destroy: () => void
 }
@@ -51,7 +58,8 @@ export interface Dropdown {
 export function createDropdown(options: DropdownOptions): Dropdown {
   let value = options.value
   let open = false
-  let active = Math.max(0, options.options.findIndex((o) => o.value === value))
+  let list = options.options
+  let active = Math.max(0, list.findIndex((o) => o.value === value))
 
   const root = document.createElement('div')
   root.className = 'ui-dropdown' + (options.className ? ` ${options.className}` : '')
@@ -74,7 +82,7 @@ export function createDropdown(options: DropdownOptions): Dropdown {
   document.body.appendChild(menu)
 
   function current(): DropdownOption | undefined {
-    return options.options.find((o) => o.value === value)
+    return list.find((o) => o.value === value)
   }
 
   function renderButton(): void {
@@ -92,7 +100,12 @@ export function createDropdown(options: DropdownOptions): Dropdown {
 
   function renderMenu(): void {
     menu.replaceChildren()
-    options.options.forEach((option, index) => {
+    // The icon column is per-list, not per-option: an option without a glyph
+    // still gets the empty tile so the labels line up — but a list where no
+    // option has one shouldn't be paying for a column of blank squares.
+    const iconColumn = list.some((o) => o.icon && hasIcon(o.icon))
+    menu.classList.toggle('ui-dropdown__menu--plain', !iconColumn)
+    list.forEach((option, index) => {
       const row = document.createElement('div')
       row.className = 'ui-dropdown__option'
       row.setAttribute('role', 'option')
@@ -101,12 +114,14 @@ export function createDropdown(options: DropdownOptions): Dropdown {
       if (option.value === value) row.classList.add('ui-dropdown__option--selected')
       if (index === active) row.classList.add('ui-dropdown__option--active')
 
-      const glyph = document.createElement('span')
-      glyph.className = 'ui-dropdown__icon'
-      if (option.icon && hasIcon(option.icon)) {
-        glyph.appendChild(createIcon(option.icon as IconName, 14))
+      if (iconColumn) {
+        const glyph = document.createElement('span')
+        glyph.className = 'ui-dropdown__icon'
+        if (option.icon && hasIcon(option.icon)) {
+          glyph.appendChild(createIcon(option.icon as IconName, 14))
+        }
+        row.appendChild(glyph)
       }
-      row.appendChild(glyph)
 
       const label = document.createElement('span')
       label.className = 'ui-dropdown__label'
@@ -141,7 +156,7 @@ export function createDropdown(options: DropdownOptions): Dropdown {
   }
 
   function choose(index: number): void {
-    const option = options.options[index]
+    const option = list[index]
     if (!option) return
     setOpen(false)
     if (option.value === value) return
@@ -161,7 +176,7 @@ export function createDropdown(options: DropdownOptions): Dropdown {
       window.removeEventListener('resize', onViewportChange)
       return
     }
-    active = Math.max(0, options.options.findIndex((o) => o.value === value))
+    active = Math.max(0, list.findIndex((o) => o.value === value))
     renderMenu()
     position()
     // A fixed menu doesn't follow its button, so scrolling the pane out from
@@ -181,7 +196,7 @@ export function createDropdown(options: DropdownOptions): Dropdown {
     const rect = button.getBoundingClientRect()
 
     menu.style.maxHeight = ''
-    menu.style.minWidth = `${Math.max(200, rect.width)}px`
+    menu.style.minWidth = `${Math.max(options.menuMinWidth ?? 200, rect.width)}px`
     // Measured while laid out but not yet painted, so a stale cap from a
     // previous opening can't decide which side this one goes on.
     menu.style.visibility = 'hidden'
@@ -201,7 +216,7 @@ export function createDropdown(options: DropdownOptions): Dropdown {
   const onViewportChange = (): void => setOpen(false)
 
   function move(direction: 1 | -1): void {
-    const count = options.options.length
+    const count = list.length
     active = (active + direction + count) % count
     highlight()
     menu.children[active]?.scrollIntoView({ block: 'nearest' })
@@ -260,6 +275,18 @@ export function createDropdown(options: DropdownOptions): Dropdown {
       value = next
       renderButton()
       if (open) renderMenu()
+    },
+    setOptions(next: DropdownOption[]) {
+      list = next
+      active = Math.max(
+        0,
+        list.findIndex((o) => o.value === value)
+      )
+      renderButton()
+      if (open) {
+        renderMenu()
+        position()
+      }
     },
     close() {
       setOpen(false)

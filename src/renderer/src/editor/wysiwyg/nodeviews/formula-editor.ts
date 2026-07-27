@@ -61,6 +61,12 @@ export interface FormulaEditorOptions {
   onCommit: (latex: string) => void
   /** Called when the author abandons the edit. */
   onCancel: () => void
+  /**
+   * Remove the formula entirely. Offered in the bar because the margin handle
+   * that deletes a block is unreachable while its editor is open — the editor
+   * is what's under the pointer.
+   */
+  onDelete?: () => void
 }
 
 const COMMIT_HINT = '⌘⏎ done · esc revert'
@@ -230,6 +236,25 @@ export class FormulaEditor {
     hint.className = 'formula-editor__hint'
     hint.textContent = COMMIT_HINT
     bar.appendChild(hint)
+
+    const onDelete = this.options.onDelete
+    if (onDelete) {
+      const remove = document.createElement('button')
+      remove.type = 'button'
+      remove.className = 'formula-editor__button formula-editor__button--danger'
+      remove.title = 'Delete this equation'
+      remove.setAttribute('aria-label', 'Delete this equation')
+      remove.appendChild(createIcon('trash', 14))
+      // As everywhere else in this bar: mousedown would blur the field and
+      // commit the edit before the click ran.
+      remove.addEventListener('mousedown', (event) => event.preventDefault())
+      remove.addEventListener('click', () => {
+        // Nothing left to commit, and the focusout that follows must not try.
+        this.finished = true
+        onDelete()
+      })
+      bar.appendChild(remove)
+    }
 
     return bar
   }
@@ -499,6 +524,19 @@ export class FormulaEditor {
     if (event.key === 'Escape') {
       event.preventDefault()
       this.finish(false)
+      return
+    }
+    // Backspace with nothing left to delete takes the equation itself. The
+    // keymap that does this for every other block can't see a key pressed in
+    // here — the field is chrome, not part of the document.
+    if (
+      (event.key === 'Backspace' || event.key === 'Delete') &&
+      this.field.value === '' &&
+      this.options.onDelete
+    ) {
+      event.preventDefault()
+      this.finished = true
+      this.options.onDelete()
       return
     }
     if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {

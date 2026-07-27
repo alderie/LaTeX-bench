@@ -22,8 +22,9 @@ import { captionNodeView } from './nodeviews/CaptionNodeView'
 import { footnoteNodeView } from './nodeviews/FootnoteNodeView'
 import { mathInlineInputRule, mathBlockInputRule } from './inputRules'
 import { slashMenu } from './slashMenu'
+import { richFind } from './find-replace'
 import { blockDeleteKeymap, blockHandle } from './block-delete'
-import { publishSelection, setActiveEditorView } from './editor-bridge'
+import { notifyEditorUpdate, publishSelection, setActiveEditorView } from './editor-bridge'
 import * as labelRegistry from './labelRegistry'
 import { usePaperStore } from '../../stores/paperStore'
 
@@ -83,6 +84,7 @@ export function WysiwygEditor(): React.JSX.Element {
           keymap(blockDeleteKeymap),
           keymap(baseKeymap),
           blockHandle(),
+          richFind(),
           markChanges()
         ]
       })
@@ -125,6 +127,7 @@ export function WysiwygEditor(): React.JSX.Element {
           // Cheap, and a no-op unless the toolbar's view of the selection
           // actually changed — see editor-bridge.
           publishSelection(newState)
+          notifyEditorUpdate()
         }
       })
       // Initial population — this is what populates labels for the

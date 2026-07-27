@@ -26,6 +26,30 @@ export function getActiveEditorView(): EditorView | null {
   return activeView
 }
 
+// Every transaction, for chrome that has to recount rather than re-derive —
+// the find widget's "3 of 17" being the one that needs it. Deliberately not
+// routed through the selection store: that one is written only when its
+// small derived shape changes, which is what keeps typing from re-rendering
+// the toolbar, and a raw tick would defeat it.
+const updateListeners = new Set<() => void>()
+
+export function subscribeEditorUpdate(listener: () => void): () => void {
+  updateListeners.add(listener)
+  return () => {
+    updateListeners.delete(listener)
+  }
+}
+
+export function notifyEditorUpdate(): void {
+  for (const listener of updateListeners) {
+    try {
+      listener()
+    } catch (err) {
+      console.error('[editor-bridge] update subscriber threw', err)
+    }
+  }
+}
+
 /**
  * What the caret is sitting in, as far as the toolbar is concerned.
  *

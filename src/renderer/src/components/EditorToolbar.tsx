@@ -12,6 +12,8 @@ import {
   SquareSigma,
   Plus,
   Minus,
+  ListTree,
+  PanelRight,
   RotateCcw,
   Undo2,
   Redo2
@@ -88,6 +90,10 @@ export function EditorToolbar(): React.JSX.Element | null {
   const zoom = useUiStore((s) => s.zoom)
   const stepZoom = useUiStore((s) => s.stepZoom)
   const resetZoom = useUiStore((s) => s.resetZoom)
+  const outlineOpen = useUiStore((s) => s.outlineOpen)
+  const toggleOutline = useUiStore((s) => s.toggleOutline)
+  const previewOpen = useUiStore((s) => s.previewOpen)
+  const togglePreview = useUiStore((s) => s.togglePreview)
   const { marks, block, ready } = useEditorSelection()
 
   // The formatting half only makes sense against the rich editor; source
@@ -181,6 +187,28 @@ export function EditorToolbar(): React.JSX.Element | null {
       )}
 
       <div className="editor-toolbar__spacer" />
+
+      {/* Which panels are showing. Not formatting, so they sit apart from
+          the marks and next to the zoom — both are about the view, not the
+          document. */}
+      <div className="editor-toolbar__group">
+        <ToolbarButton
+          title={outlineOpen ? 'Hide outline' : 'Show outline'}
+          active={outlineOpen}
+          onClick={toggleOutline}
+        >
+          <ListTree size={14} />
+        </ToolbarButton>
+        <ToolbarButton
+          title={previewOpen ? 'Hide PDF preview' : 'Show PDF preview'}
+          active={previewOpen}
+          onClick={togglePreview}
+        >
+          <PanelRight size={14} />
+        </ToolbarButton>
+      </div>
+
+      <div className="editor-toolbar__divider" />
 
       <div className="editor-toolbar__group">
         <ToolbarButton title="Zoom out  (Ctrl/Cmd −)" onClick={() => stepZoom(-1)}>

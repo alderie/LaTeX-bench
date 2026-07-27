@@ -71,6 +71,7 @@ import {
   type Heading
 } from './fold-commands'
 import { headingTitle } from '../sections'
+import { buildDiagnostics, setBuildDiagnostics } from './build-diagnostics'
 import { notifySourceUpdate, setActiveSourceView } from './source-bridge'
 import { SourceMinimap } from './SourceMinimap'
 import { positionKey, readSourcePosition, writeSourcePosition } from './source-position'
@@ -350,6 +351,7 @@ export function SourceEditor(): React.JSX.Element {
         }),
         foldGutter({ markerDOM: foldMarkerDOM }),
         lintGutter(),
+        buildDiagnostics(),
         autocompletion({ override: [latexCompletions], icons: false }),
         highlightSelectionMatches(),
         // The state and the commands, but never the panel: the widget in
@@ -497,6 +499,23 @@ export function SourceEditor(): React.JSX.Element {
       }
     }
   }, [paperId, activeFile])
+
+  // Feed the compiler's errors to the gutter, and keep them current as
+  // builds land and as the user switches between the paper's files.
+  useEffect(() => {
+    const push = (): void => {
+      const view = viewRef.current
+      if (!view) return
+      const { build, activeFile: file } = usePaperStore.getState()
+      view.dispatch({
+        effects: setBuildDiagnostics.of({ errors: build.errors, activeFile: file })
+      })
+    }
+    push()
+    return usePaperStore.subscribe((s, prev) => {
+      if (s.build.errors !== prev.build.errors || s.activeFile !== prev.activeFile) push()
+    })
+  }, [activeFile])
 
   const run = useCallback((command: Command): void => {
     const target = viewRef.current

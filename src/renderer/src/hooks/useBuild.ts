@@ -28,7 +28,10 @@ export function useBuild(): void {
         log: result.log,
         pdfPath: result.pdfPath,
         errors: result.errors,
-        durationMs: result.durationMs
+        durationMs: result.durationMs,
+        // A rebuild writes the same path, so the path alone can't tell the
+        // preview that the bytes behind it changed.
+        revision: cur.build.revision + 1
       })
     })
 

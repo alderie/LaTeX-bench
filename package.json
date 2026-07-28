@@ -14,6 +14,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
+    "test:latex": "vitest run test/compile.roundtrip.test.ts",
     "parse:debug": "node --import tsx scripts/parse-debug.mjs",
     "preview": "node --import tsx scripts/render-preview.mjs",
     "build": "npm run typecheck && electron-vite build",

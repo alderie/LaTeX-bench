@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { parseLatexToDoc } from '@renderer/editor/wysiwyg/latex-to-doc'
+import { serializeDocToLatex } from '@renderer/editor/wysiwyg/doc-to-latex'
 import { allOfType, firstOfType, flatText } from './helpers'
 
 async function parseBody(body: string) {
@@ -82,16 +83,33 @@ describe('parser — inline marks', () => {
     expect(text).toContain('after')
   })
 
-  it('drops unknown macros with no captured args and surfaces following group content', async () => {
-    // unified-latex doesn't know `\Colorhref` is 3-arg — args end up empty
-    // and the {…} groups become separate AST nodes. We drop the macro
-    // name and let those groups render transparently; the visible label
-    // is the last one. (`[orange]` and the URL still leak as text — the
-    // user can switch to Source mode to clean those up if it matters.)
-    const doc = await parseBody('Prefix \\Colorhref[orange]{https://x}{visible label} and more.')
-    expect(flatText(doc)).toContain('visible label')
-    expect(flatText(doc)).not.toContain('\\Colorhref')
-    expect(flatText(doc)).toContain('and more')
+  it('keeps an unknown macro and its arguments together', async () => {
+    // unified-latex doesn't know `\Colorhref` is 3-arg, so the macro and
+    // its `[orange]`, `{url}`, `{label}` arrive as separate AST siblings.
+    //
+    // This used to drop the macro name and render the groups transparently,
+    // which read acceptably and wrote `\Colorhrefhttps://xvisible label`
+    // back to the file — an undefined control sequence that fails the
+    // build. The whole call is preserved byte-exact now, and the last
+    // argument is what the reader sees.
+    const source = 'Prefix \\Colorhref[orange]{https://x}{visible label} and more.'
+    const doc = await parseBody(source)
+
+    const raw = allOfType(doc, 'rawInline').find((n) =>
+      (n.attrs.source as string).startsWith('\\Colorhref')
+    )
+    expect(raw, 'the macro should survive as a raw inline').toBeDefined()
+    expect(raw!.attrs.source).toBe('\\Colorhref[orange]{https://x}{visible label}')
+    expect(raw!.attrs.display).toBe('visible label')
+
+    // The prose around it is untouched, and the arguments are no longer
+    // sitting loose in it.
+    const text = flatText(doc)
+    expect(text).toContain('Prefix')
+    expect(text).toContain('and more')
+    expect(text).not.toContain('https://x')
+
+    expect(serializeDocToLatex(doc)).toContain('\\Colorhref[orange]{https://x}{visible label}')
   })
 
   it('does not duplicate citations across multiple keys', async () => {

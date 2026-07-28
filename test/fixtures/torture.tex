@@ -1,0 +1,203 @@
+% A deliberately hostile document.
+%
+% Every construct here is one that a LaTeX parser can plausibly get wrong,
+% chosen so that getting it wrong is *visible*: a swallowed comment, a
+% miscounted brace, a `&` taken for a cell separator when it is inside
+% \text{}, a \verb span reflowed across a newline. It is valid LaTeX and
+% compiles; anything the editor does to it that stops it compiling, or that
+% changes what it prints, is a bug.
+%
+% Kept as one file rather than split so that a single fixed-point check
+% exercises the interactions — a \verb inside a table cell inside a float
+% is where the individually-correct rules disagree.
+
+\documentclass[11pt,twoside]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{booktabs,multirow,array}
+\usepackage{enumitem}
+\usepackage{graphicx}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage[capitalise,noabbrev]{cleveref}
+
+% A comment that mentions \begin{document} and } and $ — none of which
+% should be read as markup.
+\newcommand{\pair}[2]{\ensuremath{\langle #1, #2 \rangle}}
+\newcommand{\opt}[2][default]{[#1]\,#2}
+\renewcommand{\labelitemi}{$\triangleright$}
+\newcommand{\braced}{\{\}}
+
+\makeatletter
+\newcommand{\internal@thing}{internal}
+\makeatother
+
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+\theoremstyle{definition}
+\newtheorem{defn}[theorem]{Definition}
+
+\title{Torture: \texorpdfstring{$\alpha$}{alpha}, braces \{like this\}, and 100\% coverage}
+\author{A. Tester}
+\date{2026-07-27}
+
+\begin{document}
+\maketitle
+
+\section[Short form]{A heading with \emph{markup}, math $\sum_{i=1}^{n} x_i$, and braces \{x\}}
+\label{sec:first}
+
+Special characters, all escaped: \$ \& \% \# \_ \{ \} \textbackslash{} and a
+tilde \~{} and a caret \^{}.
+
+A comment at the end of a line joins the next word without a space,% like this
+which is why this sentence has no gap before ``which''.
+
+Inline verbatim with a brace: \verb|if (x) { return } | and with a different
+delimiter: \verb+a|b+ and a starred one: \verb*!spaces   kept!.
+
+The macro \pair{a}{b} takes two arguments; \opt{x} takes an optional one and
+\opt[explicit]{y} supplies it.
+
+\subsection{Lists that nest}
+
+\begin{itemize}
+  \item First, with a trailing comment% not part of the item
+  \item Second, containing a nested list:
+  \begin{enumerate}[label=(\alph*)]
+    \item inner one
+    \item inner two, with an explicit marker below
+  \end{enumerate}
+  \item[!] A custom marker.
+\end{itemize}
+
+\subsection{Mathematics}
+
+Inline maths in prose: $\pair{u}{v} \leq \|u\|\,\|v\|$ and a lone
+dollar-escaped \$ sign.
+
+\begin{equation}\label{eq:cases}
+  f(x) =
+  \begin{cases}
+    x^2 & \text{if } x \geq 0, \\
+    -x  & \text{otherwise.}
+  \end{cases}
+\end{equation}
+
+An aligned block where the `\&' below is alignment and the one inside
+\text{} is not:
+
+\begin{align}
+  a &= b + c \label{eq:a} \\
+  &= d + e \notag \\
+  x &\in \{1, 2, 3\} \quad \text{(a set, not a cell \& not a group)}
+\end{align}
+
+A display with a stretched delimiter and a dropped right side:
+\[
+  \left\{ \frac{1}{2}, \frac{3}{4} \right. \qquad
+  \left( \sum_{k} a_k \right)^{\!2}
+\]
+
+\begin{subequations}\label{eq:group}
+  \begin{align}
+    p &= q \label{eq:p} \\
+    r &= s \label{eq:r}
+  \end{align}
+\end{subequations}
+
+\subsection{Tables}
+
+\begin{table}[htbp]
+  \centering
+  \caption[Short caption]{A table with spans, a footnote\footnote{Inside a
+  caption.}, and a cell containing \texttt{\&} as text.}
+  \label{tab:spans}
+  \begin{tabular}{@{}l>{\raggedright\arraybackslash}p{3cm}cc@{}}
+    \toprule
+    \multirow{2}{*}{Method} & \multicolumn{2}{c}{Group A} & Group B \\
+    \cmidrule(lr){2-3}
+    & Left & Right & Single \\
+    \midrule
+    Alpha & wrapped text that is long enough to break & $1.0$ & $2.0$ \\
+    Beta  & \verb|&| literal & $3.0$ & \multicolumn{1}{r}{$4.0$} \\[4pt]
+    Gamma & \{braced\} & $5.0$ & $6.0$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+A tabular nested inside another:
+
+\begin{tabular}{cc}
+  \toprule
+  outer & \begin{tabular}{c} inner \\ rows \end{tabular} \\
+  \bottomrule
+\end{tabular}
+
+\subsection{Floats and verbatim}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.6\linewidth]{torture-figure}
+  \caption{A real included graphic, so the \texttt{figure} path is
+  exercised end to end.}
+  \label{fig:one}
+\end{figure}
+
+\begin{lstlisting}[language=Python,caption={Braces \{ and \} in a caption}]
+def f(x):
+    if x > 0:  # a comment with % and \ and {
+        return {"key": x}
+    return None
+\end{lstlisting}
+
+\begin{verbatim}
+\begin{document}   <- not a real environment
+100% not a comment
+  indentation   preserved
+\end{verbatim}
+
+\subsection{Theorems and references}
+
+\begin{defn}[Named, with \emph{markup}]\label{def:one}
+  A definition whose body has a display:
+  \[ \varepsilon > 0. \]
+\end{defn}
+
+\begin{theorem}[Main]\label{thm:main}
+  Under \Cref{def:one} and \eqref{eq:cases}, the bound in \eqref{eq:a} holds.
+\end{theorem}
+
+\begin{proof}
+  Immediate from \Cref{sec:first} and \cite{knuth1984,lamport1994}. See also
+  \cite[Ch.~3]{knuth1984} for the optional-argument form.
+\end{proof}
+
+\subsection{Awkward whitespace}
+
+A paragraph that ends with a macro taking a line-broken argument:
+\href{https://example.org/a/very/long/path/that/wraps}{a link whose text
+spans two lines}.
+
+An empty group {} and an empty environment follow.
+
+\begin{center}
+\end{center}
+
+Text after the empty environment.
+
+\appendix
+
+\section{Appendix with the same label names}\label{sec:appendix}
+
+Referring back to \Cref{tab:spans} and forward to nothing.
+
+\begin{thebibliography}{9}
+\bibitem{knuth1984} D.~E. Knuth. \emph{The \TeX{}book}. Addison--Wesley, 1984.
+\bibitem{lamport1994} L.~Lamport. \emph{\LaTeX: A Document Preparation
+System}. Addison--Wesley, 2nd edition, 1994.
+\end{thebibliography}
+
+\end{document}

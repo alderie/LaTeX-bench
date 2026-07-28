@@ -37,34 +37,115 @@ export interface MacroSignature {
 
 const TEXT_MACROS_WITH_ONE_ARG = [
   // Font/shape switches with an argument.
-  'textbf', 'textit', 'texttt', 'textsc', 'textsf', 'textrm', 'textnormal',
-  'textsl', 'textup', 'textmd', 'emph', 'underline', 'uline', 'mbox', 'hbox',
-  'fbox', 'framebox', 'textsuperscript', 'textsubscript', 'enquote',
-  'lowercase', 'uppercase', 'MakeLowercase', 'MakeUppercase',
+  'textbf',
+  'textit',
+  'texttt',
+  'textsc',
+  'textsf',
+  'textrm',
+  'textnormal',
+  'textsl',
+  'textup',
+  'textmd',
+  'emph',
+  'underline',
+  'uline',
+  'mbox',
+  'hbox',
+  'fbox',
+  'framebox',
+  'textsuperscript',
+  'textsubscript',
+  'enquote',
+  'lowercase',
+  'uppercase',
+  'MakeLowercase',
+  'MakeUppercase',
   // Structure / metadata.
-  'title', 'author', 'date', 'subtitle', 'label', 'caption*',
-  'bibliographystyle', 'bibliography', 'nocite', 'printbibliography',
-  'input', 'include', 'subfile', 'url', 'nolinkurl', 'path',
-  'newtheoremstyle', 'theoremstyle', 'ensuremath', 'text', 'mathrm', 'mathbf',
-  'mathit', 'mathcal', 'mathbb', 'mathfrak', 'mathsf', 'mathtt', 'boldsymbol',
-  'operatorname', 'vspace', 'pagestyle', 'thispagestyle', 'phantom',
-  'hphantom', 'vphantom'
+  'title',
+  'author',
+  'date',
+  'subtitle',
+  'label',
+  'caption*',
+  'bibliographystyle',
+  'bibliography',
+  'nocite',
+  'printbibliography',
+  'input',
+  'include',
+  'subfile',
+  'url',
+  'nolinkurl',
+  'path',
+  'newtheoremstyle',
+  'theoremstyle',
+  'ensuremath',
+  'text',
+  'mathrm',
+  'mathbf',
+  'mathit',
+  'mathcal',
+  'mathbb',
+  'mathfrak',
+  'mathsf',
+  'mathtt',
+  'boldsymbol',
+  'operatorname',
+  'vspace',
+  'pagestyle',
+  'thispagestyle',
+  'phantom',
+  'hphantom',
+  'vphantom'
 ]
 
 // Citation commands. natbib and biblatex both allow two optional notes
 // before the key list: `\citep[see][p.~4]{key}`.
 export const CITE_MACRO_NAMES = [
-  'cite', 'citep', 'citet', 'Citep', 'Citet', 'citealp', 'citealt', 'Citealp',
-  'Citealt', 'citeauthor', 'Citeauthor', 'citeyear', 'citeyearpar',
-  'parencite', 'Parencite', 'textcite', 'Textcite', 'autocite', 'Autocite',
-  'footcite', 'footcitetext', 'citenum', 'citetitle', 'fullcite', 'supercite'
+  'cite',
+  'citep',
+  'citet',
+  'Citep',
+  'Citet',
+  'citealp',
+  'citealt',
+  'Citealp',
+  'Citealt',
+  'citeauthor',
+  'Citeauthor',
+  'citeyear',
+  'citeyearpar',
+  'parencite',
+  'Parencite',
+  'textcite',
+  'Textcite',
+  'autocite',
+  'Autocite',
+  'footcite',
+  'footcitetext',
+  'citenum',
+  'citetitle',
+  'fullcite',
+  'supercite'
 ]
 
 // Cross-reference commands. cleveref's `\cref` takes a comma-separated key
 // list; `\crefrange` takes two keys.
 const REF_MACROS_ONE_KEY = [
-  'ref', 'eqref', 'autoref', 'cref', 'Cref', 'cpageref', 'Cpageref', 'pageref',
-  'nameref', 'vref', 'labelcref', 'namecref', 'autopageref'
+  'ref',
+  'eqref',
+  'autoref',
+  'cref',
+  'Cref',
+  'cpageref',
+  'Cpageref',
+  'pageref',
+  'nameref',
+  'vref',
+  'labelcref',
+  'namecref',
+  'autopageref'
 ]
 const REF_MACROS_TWO_KEYS = ['crefrange', 'Crefrange', 'cpagerefrange']
 
@@ -126,16 +207,48 @@ Object.assign(MACRO_SIGNATURES, {
 // what lets `\begin{theorem}[Convergence rate]` keep its title instead of
 // silently losing it.
 const THEOREM_LIKE = [
-  'theorem', 'lemma', 'proposition', 'corollary', 'definition', 'assumption',
-  'conjecture', 'remark', 'example', 'observation', 'fact', 'claim', 'note',
-  'proof', 'problem', 'exercise', 'solution', 'question', 'axiom', 'property'
+  'theorem',
+  'lemma',
+  'proposition',
+  'corollary',
+  'definition',
+  'assumption',
+  'conjecture',
+  'remark',
+  'example',
+  'observation',
+  'fact',
+  'claim',
+  'note',
+  'proof',
+  'problem',
+  'exercise',
+  'solution',
+  'question',
+  'axiom',
+  'property'
 ]
 
 // Floats and float-ish wrappers: `[placement]` only.
 const PLACEMENT_ONLY = [
-  'figure', 'figure*', 'table', 'table*', 'algorithm', 'algorithm*', 'listing',
-  'listing*', 'sidewaystable', 'sidewaysfigure', 'lstlisting', 'Verbatim',
-  'BVerbatim', 'LVerbatim', 'itemize', 'enumerate', 'description', 'tcolorbox',
+  'figure',
+  'figure*',
+  'table',
+  'table*',
+  'algorithm',
+  'algorithm*',
+  'listing',
+  'listing*',
+  'sidewaystable',
+  'sidewaysfigure',
+  'lstlisting',
+  'Verbatim',
+  'BVerbatim',
+  'LVerbatim',
+  'itemize',
+  'enumerate',
+  'description',
+  'tcolorbox',
   'quoting'
 ]
 
@@ -173,12 +286,45 @@ Object.assign(ENVIRONMENT_SIGNATURES, {
 const DECL_RE =
   /\\(?:new|renew|provide)command\s*\*?\s*(?:\{\s*\\([A-Za-z@]+)\s*\}|\\([A-Za-z@]+))\s*(?:\[(\d+)\])?\s*(\[)?/g
 
+/**
+ * Everything before `\begin{document}`, with comments blanked out.
+ *
+ * Both halves matter, and both were wrong. A preamble comment that merely
+ * *mentions* `\begin{document}` — "% put your macros before \begin{document}"
+ * is advice people actually write — used to end the preamble right there, so
+ * every macro defined below it was invisible and every use of one was parsed
+ * as a bare macro plus loose groups. And a commented-out `\newcommand`
+ * registered a signature for a macro that does not exist.
+ *
+ * Offsets are preserved rather than removed so the returned string still
+ * lines up with the source, which keeps this cheap to reason about.
+ */
+export function preambleForSignatures(source: string): string {
+  let out = ''
+  let inComment = false
+  for (let i = 0; i < source.length; i++) {
+    const c = source[i]
+    if (c === '\n') {
+      inComment = false
+      out += c
+      continue
+    }
+    if (!inComment && c === '%') {
+      let backslashes = 0
+      for (let j = i - 1; j >= 0 && source[j] === '\\'; j--) backslashes++
+      if (backslashes % 2 === 0) inComment = true
+    }
+    out += inComment ? ' ' : c
+  }
+  const docStart = out.indexOf('\\begin{document}')
+  return docStart >= 0 ? out.slice(0, docStart) : out
+}
+
 export function signaturesFromPreamble(source: string): Record<string, MacroSignature> {
   const out: Record<string, MacroSignature> = {}
   // Only look at the preamble: definitions after \begin{document} are rare,
   // and scanning the whole body would pick up `\newcommand` inside verbatim.
-  const docStart = source.indexOf('\\begin{document}')
-  const preamble = docStart >= 0 ? source.slice(0, docStart) : source
+  const preamble = preambleForSignatures(source)
 
   DECL_RE.lastIndex = 0
   let m: RegExpExecArray | null

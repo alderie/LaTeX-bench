@@ -2,14 +2,21 @@ import './App.css'
 import * as React from 'react'
 import { useEffect } from 'react'
 import { PaperWorkspace } from './components/PaperWorkspace'
+import { useBibliography } from './hooks/useBibliography'
+import { listenForTexProgress } from './stores/texStore'
 import { useBuild } from './hooks/useBuild'
 import { useShortcuts } from './hooks/useShortcuts'
 import { useZoomGesture } from './hooks/useZoomGesture'
 
 export default function App(): React.JSX.Element {
   useBuild()
+  useBibliography()
   useShortcuts()
   useZoomGesture()
+
+  // Install progress arrives whether or not the panel that started it is
+  // still mounted, so the listener lives as long as the app does.
+  useEffect(() => listenForTexProgress(), [])
 
   // Keep the native window background in sync with the resolved theme, so
   // resizing doesn't reveal a white edge in dark mode. The window buttons

@@ -13,7 +13,10 @@ import {
   Replace,
   Map as MapIcon,
   ChevronsDownUp,
-  ChevronsUpDown
+  ChevronsUpDown,
+  FileWarning,
+  ListTree,
+  PanelRight
 } from 'lucide-react'
 import { unfoldAll } from '@codemirror/language'
 import { EditorView } from '@codemirror/view'
@@ -23,6 +26,7 @@ import { usePaperStore } from '../stores/paperStore'
 import { extractSections, type SectionEntry } from '../editor/sections'
 import { getActiveSourceView } from '../editor/source/source-bridge'
 import { foldToLevel } from '../editor/source/fold-commands'
+import { jumpToSectionIndex } from '../editor/navigate'
 
 const CommandRoot = Command as any
 const CommandInputC = (Command as any).Input
@@ -59,7 +63,7 @@ export function CommandPalette(): React.JSX.Element | null {
 
   const close = (): void => setOpen(false)
 
-  const jumpToSection = (s: SectionItem): void => {
+  const jumpToSection = (s: SectionItem, index: number): void => {
     close()
     // In the source view, move the actual caret. The previous version
     // counted `.cm-line` elements in the DOM, which only works for sections
@@ -76,13 +80,9 @@ export function CommandPalette(): React.JSX.Element | null {
       view.focus()
       return
     }
-    setTimeout(() => {
-      const cm = document.querySelector('.cm-content') as HTMLElement | null
-      if (!cm) return
-      const lines = cm.querySelectorAll('.cm-line')
-      const target = lines[s.line]
-      if (target) (target as HTMLElement).scrollIntoView({ block: 'center' })
-    }, 0)
+    // The rich view has no lines — the nth entry in the outline is the nth
+    // `section` node, which is the index both views share.
+    jumpToSectionIndex(index)
   }
 
   /** Run a CodeMirror command from the palette, if the source view is up. */
@@ -122,15 +122,15 @@ export function CommandPalette(): React.JSX.Element | null {
 
             {sections.length > 0 && (
               <CommandGroupC heading="Sections" className="command-palette__group">
-                {sections.map((s) => (
+                {sections.map((s, index) => (
                   <CommandItemC
                     key={s.id}
                     value={`section ${s.title}`}
-                    onSelect={() => jumpToSection(s)}
+                    onSelect={() => jumpToSection(s, index)}
                     className="command-palette__item"
                   >
                     <Hash size={14} />
-                    <span style={{ paddingLeft: `${(s.level - 1) * 12}px` }}>{s.title}</span>
+                    <span style={{ paddingLeft: `${s.depth * 12}px` }}>{s.title}</span>
                   </CommandItemC>
                 ))}
               </CommandGroupC>
@@ -207,9 +207,42 @@ export function CommandPalette(): React.JSX.Element | null {
                 <MapIcon size={14} />
                 <span>Toggle minimap</span>
               </CommandItemC>
+              <CommandItemC
+                value="outline toggle sections panel contents"
+                onSelect={() => {
+                  close()
+                  useUiStore.getState().toggleOutline()
+                }}
+                className="command-palette__item"
+              >
+                <ListTree size={14} />
+                <span>Toggle outline</span>
+              </CommandItemC>
             </CommandGroupC>
 
             <CommandGroupC heading="View" className="command-palette__group">
+              <CommandItemC
+                value="pdf preview toggle output compiled document"
+                onSelect={() => {
+                  close()
+                  useUiStore.getState().togglePreview()
+                }}
+                className="command-palette__item"
+              >
+                <PanelRight size={14} />
+                <span>Toggle PDF preview</span>
+              </CommandItemC>
+              <CommandItemC
+                value="build results problems errors log output"
+                onSelect={() => {
+                  close()
+                  useUiStore.getState().toggleBuildPanel()
+                }}
+                className="command-palette__item"
+              >
+                <FileWarning size={14} />
+                <span>Toggle build results</span>
+              </CommandItemC>
               <CommandItemC
                 value="reset zoom 100% actual size"
                 onSelect={() => {

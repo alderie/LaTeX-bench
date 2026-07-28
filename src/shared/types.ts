@@ -46,13 +46,73 @@ export interface BuildError {
   severity: 'error' | 'warning'
 }
 
+/**
+ * A package the compile stopped for, and the file that gave it away.
+ *
+ * Carried on the build result so the build panel can offer to install it
+ * rather than leaving "File `mathtools.sty' not found" as the last word.
+ */
+export interface MissingPackage {
+  /** The file TeX could not find, e.g. `mathtools.sty`. */
+  file: string
+  /** The TeX Live package that provides it, e.g. `mathtools`. */
+  name: string
+}
+
 export interface BuildResult {
   success: boolean
   paperId: string
   pdfPath: string | null
   log: string
   errors: BuildError[]
+  /** Empty unless the build died for want of a package we can fetch. */
+  missingPackages: MissingPackage[]
   durationMs: number
+}
+
+// ── Managed TeX installation ─────────────────────────────────────────────
+//
+// The app can install its own TeX Live into a directory it owns, so a user
+// who has never installed TeX can compile a paper without leaving the app —
+// and can get rid of all of it again by deleting one folder.
+
+export type TexInstallPhase =
+  | 'idle'
+  | 'download'
+  | 'extract'
+  | 'install'
+  | 'configure'
+  | 'packages'
+  | 'done'
+  | 'failed'
+
+export interface TexInstallProgress {
+  phase: TexInstallPhase
+  /** 0–100 across the whole job, not within the phase. */
+  percent: number
+  /** What is happening right now, in a few words. */
+  message: string
+  /** Present when `phase` is 'failed'. */
+  error?: string
+}
+
+export interface TexInstallState {
+  /** A usable managed installation is present. */
+  installed: boolean
+  /** An install is running right now. */
+  installing: boolean
+  /** Absolute path of the managed directory, whether or not it exists. */
+  directory: string
+  /** Absolute path of the managed `bin` directory, when installed. */
+  binDir: string | null
+  /** e.g. "TeX Live 2026". */
+  version: string | null
+  /** Bytes on disk, or 0 when not installed. */
+  sizeBytes: number
+  /** The most recent progress record, so a reopened window can catch up. */
+  progress: TexInstallProgress
+  /** A TeX found on the system PATH, which makes installing optional. */
+  systemTexAvailable: boolean
 }
 
 export interface EngineInfo {
@@ -120,6 +180,13 @@ export interface PaperAPI {
   writeTex: (paperId: string, tex: string) => Promise<void>
   readBib: (paperId: string) => Promise<string>
   writeBib: (paperId: string, bib: string) => Promise<void>
+  /** Read a paper-relative `.tex` — the files `\input`/`\include` pull in. */
+  readTexFile: (paperId: string, relPath: string) => Promise<string>
+  writeTexFile: (paperId: string, relPath: string, tex: string) => Promise<void>
+  /** Whether a paper-relative `.tex` exists inside the paper's folder. */
+  texFileExists: (paperId: string, relPath: string) => Promise<boolean>
+  /** Every `.tex` in the paper folder, paper-relative. */
+  listTexFiles: (paperId: string) => Promise<string[]>
   getSettings: (paperId: string) => Promise<PaperSettings>
   saveSettings: (paperId: string, settings: PaperSettings) => Promise<void>
   onChanged: (cb: (paperId: string) => void) => () => void
@@ -132,6 +199,22 @@ export interface LatexAPI {
   readPdf: (paperId: string) => Promise<Uint8Array | null>
   onProgress: (cb: (e: { paperId: string; line: string }) => void) => () => void
   onComplete: (cb: (result: BuildResult) => void) => () => void
+}
+
+export interface TexAPI {
+  /** Current state of the managed installation. */
+  getState: () => Promise<TexInstallState>
+  /** Download and install TeX Live into the app's own directory. */
+  install: () => Promise<TexInstallState>
+  /** Stop an install in progress and clean up the partial tree. */
+  cancel: () => Promise<TexInstallState>
+  /** Delete the managed installation. */
+  remove: () => Promise<TexInstallState>
+  /** Add packages to the existing installation, e.g. one a build asked for. */
+  installPackages: (names: string[]) => Promise<TexInstallState>
+  /** Reveal the managed directory in the OS file manager. */
+  reveal: () => Promise<void>
+  onProgress: (cb: (progress: TexInstallProgress) => void) => () => void
 }
 
 export interface McpAPI {

@@ -1,5 +1,6 @@
 import { Node as PMNode } from 'prosemirror-model'
 import { latexSchema } from './schema'
+import { repairMissingColumnSpec } from './repair-tabular'
 import { ENVIRONMENT_SIGNATURES, macroSignaturesFor } from './latex-signatures'
 import {
   ACCENT_MACRO_NAMES,
@@ -14,17 +15,24 @@ import {
 type AstNode = any
 type AstNodeArr = AstNode[]
 
-let parseModulePromise: Promise<typeof import('@unified-latex/unified-latex-util-parse')> | null = null
-let printModulePromise: Promise<typeof import('@unified-latex/unified-latex-util-print-raw')> | null = null
+let parseModulePromise: Promise<typeof import('@unified-latex/unified-latex-util-parse')> | null =
+  null
+let printModulePromise: Promise<
+  typeof import('@unified-latex/unified-latex-util-print-raw')
+> | null = null
 
-async function loadParseModule(): Promise<typeof import('@unified-latex/unified-latex-util-parse')> {
+async function loadParseModule(): Promise<
+  typeof import('@unified-latex/unified-latex-util-parse')
+> {
   if (!parseModulePromise) {
     parseModulePromise = import('@unified-latex/unified-latex-util-parse')
   }
   return parseModulePromise
 }
 
-export async function loadPrintModule(): Promise<typeof import('@unified-latex/unified-latex-util-print-raw')> {
+export async function loadPrintModule(): Promise<
+  typeof import('@unified-latex/unified-latex-util-print-raw')
+> {
   if (!printModulePromise) {
     printModulePromise = import('@unified-latex/unified-latex-util-print-raw')
   }
@@ -87,7 +95,11 @@ function spanOf(node: any): [number, number] | null {
       if (arg?.openMark !== '{' && arg?.openMark !== '[') continue
       let k = cursor
       while (k < sourceText.length && /\s/.test(sourceText[k])) k++
-      const argEnd = balancedEnd(k, arg.openMark, arg.closeMark ?? (arg.openMark === '{' ? '}' : ']'))
+      const argEnd = balancedEnd(
+        k,
+        arg.openMark,
+        arg.closeMark ?? (arg.openMark === '{' ? '}' : ']')
+      )
       if (argEnd === null) break
       cursor = argEnd
     }
@@ -522,7 +534,10 @@ export async function parseLatexToDoc(input: string): Promise<ParseResult> {
   const { getParser } = await loadParseModule()
   const { printRaw } = await loadPrintModule()
 
-  const tex = repairSerializerDamage(input)
+  // Both repairs undo damage earlier builds of this editor wrote to `.tex`
+  // files. Neither is self-healing: the damaged form round trips unchanged,
+  // so without this the same fatal error comes back on every build.
+  const tex = repairMissingColumnSpec(repairSerializerDamage(input))
   sourceText = tex
   // Parse with an explicit signature table (see latex-signatures.ts). Without
   // it unified-latex can't know that `\citep[see][p.~4]{key}` has three
@@ -545,8 +560,7 @@ export async function parseLatexToDoc(input: string): Promise<ParseResult> {
   }
 
   const preambleNodes: AstNodeArr = docStart >= 0 ? root.slice(0, docStart) : []
-  const bodyNodes: AstNodeArr =
-    docStart >= 0 ? (root[docStart] as any).content : root // fall back to entire input
+  const bodyNodes: AstNodeArr = docStart >= 0 ? (root[docStart] as any).content : root // fall back to entire input
 
   const documentClass = extractDocumentClass(preambleNodes)
   const mathMacros = extractMathMacros(preambleNodes, printRaw)
@@ -576,8 +590,12 @@ export async function parseLatexToDoc(input: string): Promise<ParseResult> {
 
   // Build the PM doc. Top-level always starts with a hidden preamble node so
   // the round-trip can reattach it on serialize.
+  // No `\begin{document}` means this isn't a whole paper — it's one of the
+  // files the paper `\input`s. Recorded on the preamble node so serializing
+  // gives the fragment back rather than promoting it to a document.
+  const isFragment = docStart < 0
   const docContent: PMNode[] = [
-    latexSchema.nodes.preamble.create({ source: preambleText })
+    latexSchema.nodes.preamble.create({ source: preambleText, fragment: isFragment })
   ]
   if (blocks.length === 0) {
     docContent.push(latexSchema.nodes.paragraph.create())
@@ -669,9 +687,7 @@ function extractTitleMetadata(
       // Detect `\today` so we can re-emit it on serialize without baking
       // a frozen date into the source.
       const onlyToday =
-        content.length === 1 &&
-        content[0].type === 'macro' &&
-        content[0].content === 'today'
+        content.length === 1 && content[0].type === 'macro' && content[0].content === 'today'
       meta.dateNodes = content
       meta.dateKind = onlyToday ? 'today' : 'literal'
       meta.hasAny = true
@@ -726,9 +742,7 @@ function extractMathMacros(
     if (!content || content.length === 0) return null
     // Inside `{\name}` the macro arrives as a single node of type=macro.
     // unified-latex represents `\name` as `{ type: 'macro', content: 'name' }`.
-    const first = content.find(
-      (c: any) => c.type !== 'whitespace' && c.type !== 'comment'
-    )
+    const first = content.find((c: any) => c.type !== 'whitespace' && c.type !== 'comment')
     if (!first) return null
     if (first.type === 'macro' && typeof first.content === 'string') {
       return `\\${first.content}`
@@ -777,7 +791,7 @@ function extractMathMacros(
       if (groupArgs.length < 2) continue
       const macroName = macroNameOf(groupArgs[0])
       if (!macroName) continue
-      const numArgs = optionalArgs.length > 0 ? numericArg(optionalArgs[0]) ?? 0 : 0
+      const numArgs = optionalArgs.length > 0 ? (numericArg(optionalArgs[0]) ?? 0) : 0
       const body = printRaw(groupArgs[groupArgs.length - 1].content)
       // KaTeX deduces argument count from the highest #N in the body, so
       // we can pass the body as-is. We still record numArgs in case a
@@ -798,11 +812,9 @@ function extractMathMacros(
       const hasStarArg = args.some(
         (a) =>
           a.openMark === '' &&
-          (a.content ?? []).some(
-            (c: any) => c.type === 'string' && c.content === '*'
-          )
+          (a.content ?? []).some((c: any) => c.type === 'string' && c.content === '*')
       )
-      const opName = (starredHere || hasStarArg) ? '\\operatorname*' : '\\operatorname'
+      const opName = starredHere || hasStarArg ? '\\operatorname*' : '\\operatorname'
       macros[macroName] = `${opName}{${body}}`
       continue
     }
@@ -985,9 +997,7 @@ function nodesToBlocks(
       const starInArgs = (n.args ?? []).some(
         (a: any) =>
           a.openMark === '' &&
-          (a.content ?? []).some(
-            (c: any) => c.type === 'string' && c.content === '*'
-          )
+          (a.content ?? []).some((c: any) => c.type === 'string' && c.content === '*')
       )
       if (starInArgs) starred = true
       else {
@@ -1181,10 +1191,7 @@ function nodesToBlocks(
       continue
     }
 
-    if (
-      n.type === 'displaymath' ||
-      (n.type === 'group' && (n as any).env === 'displaymath')
-    ) {
+    if (n.type === 'displaymath' || (n.type === 'group' && (n as any).env === 'displaymath')) {
       flushParagraph()
       pushBlock(
         latexSchema.nodes.mathBlock.create({
@@ -1263,10 +1270,7 @@ function buildSection(frame: {
   )
 }
 
-function buildTitleBlock(
-  meta: TitleMetadata,
-  printRaw: (n: AstNodeArr) => string
-): PMNode | null {
+function buildTitleBlock(meta: TitleMetadata, printRaw: (n: AstNodeArr) => string): PMNode | null {
   if (!meta.hasAny) return null
   const titleInline = inlineNodes(meta.titleNodes, printRaw)
   const titleHeading = latexSchema.nodes.titleHeading.create({}, titleInline)
@@ -1357,9 +1361,7 @@ function envArgTexts(
   envNode: any,
   printRaw: (n: AstNodeArr) => string
 ): Array<{ openMark: string; text: string }> {
-  const args = (envNode.args ?? []).filter(
-    (a: any) => a.openMark === '[' || a.openMark === '{'
-  )
+  const args = (envNode.args ?? []).filter((a: any) => a.openMark === '[' || a.openMark === '{')
   if (args.length === 0) return []
   const start = envNode?.position?.start?.offset
   if (typeof start === 'number') {
@@ -1541,7 +1543,8 @@ function buildSimpleFigure(envNode: any, printRaw: (n: AstNodeArr) => string): P
   const placement = captured || stripped.text || ''
 
   for (const child of stripped.rest) {
-    if (child.type === 'whitespace' || child.type === 'comment' || child.type === 'parbreak') continue
+    if (child.type === 'whitespace' || child.type === 'comment' || child.type === 'parbreak')
+      continue
     if (child.type !== 'macro') return null
     switch (child.content) {
       case 'includegraphics': {
@@ -1697,10 +1700,7 @@ function buildBibliography(envNode: any, printRaw: (n: AstNodeArr) => string): P
     if (currentKey === null) return
     const inline = inlineNodes(currentBody, printRaw)
     items.push(
-      latexSchema.nodes.bibitem.create(
-        { key: currentKey, label: currentLabel },
-        trimInline(inline)
-      )
+      latexSchema.nodes.bibitem.create({ key: currentKey, label: currentLabel }, trimInline(inline))
     )
     currentKey = null
     currentLabel = null
@@ -1747,7 +1747,12 @@ function extractLabel(nodes: AstNodeArr): string | null {
   for (const n of nodes) {
     if (n.type === 'macro' && n.content === 'label') {
       const arg = (n.args ?? []).find((a: any) => a.openMark === '{')
-      return (arg?.content ?? []).map((c: any) => (c.content ?? c.value ?? '')).join('').trim() || null
+      return (
+        (arg?.content ?? [])
+          .map((c: any) => c.content ?? c.value ?? '')
+          .join('')
+          .trim() || null
+      )
     }
   }
   return null
@@ -1761,17 +1766,19 @@ function extractLabel(nodes: AstNodeArr): string | null {
 // apart and re-emit `~` on serialize.
 const NBSP = '\u00a0'
 function applyLigatures(s: string): string {
-  return s
-    .replace(/---/g, '—')
-    .replace(/--/g, '–')
-    .replace(/``/g, '“')
-    .replace(/''/g, '”')
-    // A lone backtick/apostrophe is the single-quote pair. LaTeX sets
-    // them as curly quotes, so showing the raw ASCII would be a
-    // visible mismatch with the compiled PDF.
-    .replace(/`/g, '‘')
-    .replace(/'/g, '’')
-    .replace(/~/g, NBSP)
+  return (
+    s
+      .replace(/---/g, '—')
+      .replace(/--/g, '–')
+      .replace(/``/g, '“')
+      .replace(/''/g, '”')
+      // A lone backtick/apostrophe is the single-quote pair. LaTeX sets
+      // them as curly quotes, so showing the raw ASCII would be a
+      // visible mismatch with the compiled PDF.
+      .replace(/`/g, '‘')
+      .replace(/'/g, '’')
+      .replace(/~/g, NBSP)
+  )
 }
 
 function inlineNodes(nodes: AstNodeArr, printRaw: (n: AstNodeArr) => string): PMNode[] {
@@ -1839,9 +1846,7 @@ function inlineNodes(nodes: AstNodeArr, printRaw: (n: AstNodeArr) => string): PM
       // rewrote formulas the user never touched.
       const raw = rawOf(n, printRaw).trim()
       const inner = /^\$([\s\S]*)\$$/.exec(raw)?.[1]
-      out.push(
-        latexSchema.nodes.mathInline.create({ latex: inner ?? printRaw(n.content ?? []) })
-      )
+      out.push(latexSchema.nodes.mathInline.create({ latex: inner ?? printRaw(n.content ?? []) }))
     } else if (n.type === 'macro') {
       // Constructs that are really just characters (`\%`, `\c{c}`, `\ss`)
       // join the text buffer rather than becoming their own node. Keeping
@@ -1918,10 +1923,7 @@ const REF_MACROS = new Set([
   'labelcref'
 ])
 
-const ARG_CONSUMING_INLINE_MACROS = new Set([
-  ...CITE_MACROS,
-  ...REF_MACROS
-])
+const ARG_CONSUMING_INLINE_MACROS = new Set([...CITE_MACROS, ...REF_MACROS])
 
 function absorbTrailingArg(
   nodes: AstNodeArr,
@@ -2012,10 +2014,7 @@ function macroAsText(macro: any, printRaw: (n: AstNodeArr) => string): string | 
   return null
 }
 
-function macroToInline(
-  macro: any,
-  printRaw: (n: AstNodeArr) => string
-): PMNode | PMNode[] | null {
+function macroToInline(macro: any, printRaw: (n: AstNodeArr) => string): PMNode | PMNode[] | null {
   const name = macro.content as string
 
   // `\footnote{…}` / `\thanks{…}`. Keeping the body as raw LaTeX (rather
@@ -2176,6 +2175,11 @@ function trimInline(inline: PMNode[]): PMNode[] {
   // Collapse leading/trailing whitespace inside the paragraph.
   const out = [...inline]
   while (out.length > 0 && out[0].isText && (out[0].text ?? '').trim() === '') out.shift()
-  while (out.length > 0 && out[out.length - 1].isText && (out[out.length - 1].text ?? '').trim() === '') out.pop()
+  while (
+    out.length > 0 &&
+    out[out.length - 1].isText &&
+    (out[out.length - 1].text ?? '').trim() === ''
+  )
+    out.pop()
   return out
 }

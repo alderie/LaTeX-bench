@@ -6,6 +6,8 @@ import type { BrowserWindow } from 'electron'
 import type { BuildError, BuildResult, PaperSettings } from '../../shared/types'
 import type { PaperStoreManager } from '../store'
 import { parseLatexLog } from './log-parser'
+import { missingPackagesFromLog } from './tex-packages'
+import { managedExecutable, texEnv } from './managed-tex'
 
 // Spawns user-installed pdflatex / xelatex / latexmk. Streams progress lines
 // to the renderer; on success copies the PDF to <paperDir>/out/main.pdf.
@@ -29,16 +31,31 @@ export class LatexCompiler {
     const start = Date.now()
     const { cmd, args } = buildCommand(settings.engine, settings.mainFile)
 
+    // Prefer the TeX the app installed for itself. Spawning the absolute
+    // path is not enough on its own — `latexmk` shells out to `pdflatex` and
+    // `biber` by name — so the child's PATH leads with the managed `bin` too.
+    const managed = managedExecutable(store.rootDir, cmd)
+    const command = managed ?? cmd
+    const env = texEnv(store.rootDir)
+
     return new Promise<BuildResult>((resolve) => {
-      const child = spawn(cmd, args, {
+      const child = spawn(command, args, {
         cwd: paperDir,
         windowsHide: true,
-        shell: false
+        shell: false,
+        env
       })
       this.running.set(paperId, child)
 
       let stdout = ''
       let stderr = ''
+      // A binary that isn't on PATH makes Node emit *both* `error` and
+      // `close`. The `error` handler is the one that knows what went wrong
+      // ("is TeX Live installed?"); the `close` that follows it finds no log
+      // file, parses nothing out of an empty string, and used to overwrite
+      // that answer with a bare failure carrying no errors at all. First
+      // result wins.
+      let settled = false
       const send = (line: string) => {
         try {
           this.mainWindow.webContents.send('latex:build-progress', { paperId, line })
@@ -59,6 +76,8 @@ export class LatexCompiler {
       })
 
       child.on('error', (err) => {
+        if (settled) return
+        settled = true
         this.running.delete(paperId)
         const result: BuildResult = {
           success: false,
@@ -67,10 +86,15 @@ export class LatexCompiler {
           log: stderr || err.message,
           errors: [
             {
-              message: `Failed to spawn '${cmd}': ${err.message}. Is TeX Live / MiKTeX installed and on PATH?`,
+              // The install button in the build panel keys off this being
+              // the reason a build failed, so the wording says what is
+              // missing rather than only that something went wrong.
+              message: `No LaTeX engine found: '${cmd}' could not be started (${err.message}). Install TeX from the build panel, or install TeX Live / MiKTeX yourself and put it on PATH.`,
               severity: 'error'
             }
           ],
+          // Nothing ran, so nothing can be missing yet — the engine itself is.
+          missingPackages: [],
           durationMs: Date.now() - start
         }
         try {
@@ -82,6 +106,8 @@ export class LatexCompiler {
       })
 
       child.on('close', async (code) => {
+        if (settled) return
+        settled = true
         this.running.delete(paperId)
 
         // latexmk / pdflatex usually leave a .log file even on error — prefer
@@ -113,12 +139,28 @@ export class LatexCompiler {
           }
         }
 
+        // A failure the log parser found nothing in is the worst possible
+        // report: the panel says the build failed and then has nothing to
+        // show for it. Say what we do know — the exit code, and where the
+        // full output is — rather than an empty list.
+        if (!success && errors.length === 0) {
+          errors.push({
+            message:
+              `${cmd} exited with code ${code ?? 'unknown'} and produced no PDF. ` +
+              'Nothing in the log matched a known error pattern — see the Log tab for the full output.',
+            severity: 'error'
+          })
+        }
+
         const result: BuildResult = {
           success,
           paperId,
           pdfPath: success ? finalPdf : null,
           log: logText,
           errors,
+          // Only when the build failed: a successful run can still mention a
+          // file it didn't find on a first pass and then resolved.
+          missingPackages: success ? [] : missingPackagesFromLog(logText),
           durationMs: Date.now() - start
         }
         try {

@@ -1,6 +1,6 @@
 import { readFile, writeFile, rename, mkdir, readdir, rm, stat } from 'fs/promises'
 import { existsSync } from 'fs'
-import { join } from 'path'
+import { dirname, join, normalize, sep } from 'path'
 import { randomUUID } from 'crypto'
 import type { BrowserWindow } from 'electron'
 import type {
@@ -283,6 +283,73 @@ export class PaperStoreManager {
     record.settings = settings
     record.updatedAt = Date.now()
     await this.writeRecord(record)
+  }
+
+  // ── Multi-file: the `.tex` files a paper `\input`s ──
+  //
+  // The renderer resolves `\input{sections/method}` into a path and asks for
+  // it by name. Everything below is sandboxed to the paper's own folder and
+  // to `.tex` files, so a crafted `\input{../../../etc/passwd}` in a shared
+  // paper resolves outside the sandbox and is refused rather than served.
+
+  /** Absolute path for a paper-relative `.tex`, or null if it escapes. */
+  private resolveTexPath(paperId: string, relPath: string): string | null {
+    if (!relPath || !relPath.toLowerCase().endsWith('.tex')) return null
+    const paperDir = this.paperDir(paperId)
+    const target = normalize(join(paperDir, relPath))
+    if (!target.startsWith(paperDir + sep)) return null
+    // The build and output folders are generated; they are not the source.
+    const rel = target.slice(paperDir.length + 1)
+    if (rel.startsWith(BUILD_DIR + sep) || rel.startsWith(OUT_DIR + sep)) return null
+    return target
+  }
+
+  async readTexFile(paperId: string, relPath: string): Promise<string> {
+    const path = this.resolveTexPath(paperId, relPath)
+    if (!path || !existsSync(path)) return ''
+    return readFile(path, 'utf-8')
+  }
+
+  async writeTexFile(paperId: string, relPath: string, tex: string): Promise<void> {
+    const path = this.resolveTexPath(paperId, relPath)
+    if (!path) throw new Error(`Refusing to write outside the paper folder: ${relPath}`)
+    await this.queueWrite(async () => {
+      await mkdir(dirname(path), { recursive: true })
+      const tmp = path + '.tmp'
+      await writeFile(tmp, tex, 'utf-8')
+      await rename(tmp, path)
+      await this.bumpUpdatedAt(paperId)
+    })
+  }
+
+  /** Whether a paper-relative `.tex` exists and is inside the sandbox. */
+  async texFileExists(paperId: string, relPath: string): Promise<boolean> {
+    const path = this.resolveTexPath(paperId, relPath)
+    return path !== null && existsSync(path)
+  }
+
+  /** Every `.tex` in the paper folder, paper-relative, in sorted order. */
+  async listTexFiles(paperId: string): Promise<string[]> {
+    const paperDir = this.paperDir(paperId)
+    if (!existsSync(paperDir)) return []
+    const out: string[] = []
+    const walk = async (dir: string): Promise<void> => {
+      const entries = await readdir(dir, { withFileTypes: true })
+      for (const entry of entries) {
+        const full = join(dir, entry.name)
+        const rel = full.slice(paperDir.length + 1)
+        if (entry.isDirectory()) {
+          if (entry.name === BUILD_DIR || entry.name === OUT_DIR || entry.name.startsWith('.')) {
+            continue
+          }
+          await walk(full)
+        } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.tex')) {
+          out.push(rel.split(sep).join('/'))
+        }
+      }
+    }
+    await walk(paperDir)
+    return out.sort()
   }
 
   async readPdf(paperId: string): Promise<Uint8Array | null> {

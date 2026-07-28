@@ -547,11 +547,638 @@
   font-style: italic;
 }
 
+/* [ editor (+ outline) | divider | PDF ] across, with the build results
+   under the editor half only — the PDF pane keeps its full height. */
+.editor-pane__split {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+}
+
+.editor-pane__main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .editor-pane__body {
   flex: 1;
   min-height: 0;
   display: flex;
+  flex-direction: row;
+}
+
+.editor-pane__editor {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
   flex-direction: column;
+}
+
+.editor-pane__preview {
+  width: var(--preview-width, 460px);
+  flex: 0 0 var(--preview-width, 460px);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+}
+
+/* ── The split divider ────────────────────────────────────────────── */
+
+/* Four pixels wide, with a wider invisible grab area: a divider you have to
+   aim at is one you end up dragging the scrollbar instead of. */
+.preview-divider {
+  flex: 0 0 4px;
+  position: relative;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+.preview-divider::after {
+  content: '';
+  position: absolute;
+  inset: 0 -3px;
+}
+.preview-divider:hover,
+body.is-resizing-preview .preview-divider {
+  background: var(--editor-cursor);
+}
+body.is-resizing-preview {
+  cursor: col-resize;
+  user-select: none;
+}
+
+/* ── Outline panel ────────────────────────────────────────────────── */
+
+.outline-panel {
+  flex: 0 0 210px;
+  width: 210px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  font-family: var(--font-sans);
+  user-select: none;
+}
+
+.outline-panel__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 8px 6px 12px;
+  flex-shrink: 0;
+}
+
+.outline-panel__heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.outline-panel__close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.outline-panel__close:hover {
+  background: var(--overlay-hover);
+  color: var(--text-primary);
+}
+
+.outline-panel__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 12px;
+}
+
+.outline-panel__group + .outline-panel__group {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.outline-panel__group-heading {
+  padding: 2px 12px 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.outline-panel__item,
+.outline-panel__file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 10px 4px 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+.outline-panel__item:hover,
+.outline-panel__file:hover:not(:disabled) {
+  background: var(--overlay-hover);
+  color: var(--text-primary);
+}
+
+/* The heading the caret is under. A left rule rather than a fill: the
+   outline is read alongside the text, and a filled row pulls the eye off
+   the page you are actually writing on. */
+.outline-panel__item--active {
+  border-left-color: var(--editor-cursor);
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.outline-panel__item-icon {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+
+.outline-panel__item-title,
+.outline-panel__file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A `\section*` is in the outline but not in the numbering; the outline
+   says so by being quieter about it. */
+.outline-panel__item--starred .outline-panel__item-title {
+  font-style: italic;
+}
+
+.outline-panel__file--active {
+  color: var(--text-primary);
+  font-weight: 500;
+  background: var(--bg-secondary);
+}
+.outline-panel__file--missing {
+  color: var(--status-error);
+  cursor: default;
+}
+
+.outline-panel__empty {
+  margin: 4px 12px;
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.outline-panel__empty code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+/* ── Build results ────────────────────────────────────────────────── */
+
+.build-panel {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  font-family: var(--font-sans);
+}
+.build-panel--open {
+  /* Tall enough for a handful of errors without taking the page over. */
+  max-height: 260px;
+}
+
+.build-panel__bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 5px 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  user-select: none;
+}
+.build-panel__bar:hover {
+  background: var(--overlay-hover);
+}
+
+.build-panel__state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 500;
+}
+.build-panel__state--ok {
+  color: var(--status-ok);
+}
+.build-panel__state--bad {
+  color: var(--status-error);
+}
+.build-panel__state--running {
+  color: var(--text-secondary);
+}
+.build-panel__state--idle {
+  color: var(--text-tertiary);
+}
+
+.build-panel__spin {
+  animation: build-panel-spin 0.9s linear infinite;
+}
+@keyframes build-panel-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .build-panel__spin,
+  .pdf-preview__spin {
+    animation: none;
+  }
+}
+
+.build-panel__summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.build-panel__count {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-variant-numeric: tabular-nums;
+}
+.build-panel__count--error {
+  color: var(--status-error);
+}
+.build-panel__count--warning {
+  color: var(--status-warn);
+}
+
+.build-panel__spacer {
+  flex: 1;
+}
+
+.build-panel__body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.build-panel__tabs {
+  display: flex;
+  gap: 2px;
+  padding: 5px 10px 0;
+  flex-shrink: 0;
+}
+.build-panel__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.build-panel__tab:hover {
+  background: var(--overlay-hover);
+}
+.build-panel__tab--active {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.build-panel__list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 6px 0 0;
+  padding: 0 0 6px;
+  list-style: none;
+  max-height: 190px;
+}
+
+.build-panel__row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 12px;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.build-panel__row-icon {
+  flex-shrink: 0;
+  align-self: center;
+  color: var(--status-error);
+}
+.build-panel__row--warning .build-panel__row-icon {
+  color: var(--status-warn);
+}
+.build-panel__row--locatable {
+  cursor: pointer;
+}
+.build-panel__row--locatable:hover {
+  background: var(--overlay-hover);
+  color: var(--text-primary);
+}
+.build-panel__row-message {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+.build-panel__row-where {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+}
+
+.build-panel__log {
+  flex: 1;
+  min-height: 0;
+  max-height: 200px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 0 12px 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.build-panel__empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 12px;
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+}
+
+/* ── Managed TeX installation ─────────────────────────────────────── */
+
+.tex-install {
+  flex-shrink: 0;
+  margin: 8px 10px 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  background: var(--bg-secondary);
+  font-size: 11.5px;
+}
+.tex-install--ready {
+  border-color: color-mix(in srgb, var(--status-ok) 35%, var(--border-color));
+}
+.tex-install--busy {
+  border-color: color-mix(in srgb, var(--editor-cursor) 40%, var(--border-color));
+}
+/* A build that stopped for a fetchable package is a warning, not a failure —
+   the fix is in the card itself. */
+.tex-install--missing {
+  border-color: color-mix(in srgb, var(--status-warn) 45%, var(--border-color));
+}
+
+.tex-install__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-primary);
+}
+
+.tex-install__title {
+  font-weight: 500;
+}
+.tex-install__ok {
+  color: var(--status-ok);
+}
+.tex-install__meta,
+.tex-install__percent {
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+.tex-install__spacer {
+  flex: 1;
+}
+
+.tex-install__action {
+  padding: 4px 11px;
+  border: none;
+  border-radius: 6px;
+  background: var(--text-primary);
+  color: var(--bg-primary);
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.tex-install__action:hover {
+  background: var(--text-secondary);
+}
+
+.tex-install__ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.tex-install__ghost:hover {
+  background: var(--overlay-hover);
+  color: var(--text-primary);
+}
+
+.tex-install__danger {
+  padding: 3px 9px;
+  border: none;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--status-error) 16%, transparent);
+  color: var(--status-error);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.tex-install__danger:hover {
+  background: color-mix(in srgb, var(--status-error) 26%, transparent);
+}
+
+.tex-install__detail {
+  margin: 5px 0 0;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+/* A determinate bar, because the package counter makes it determinate. An
+   indeterminate shimmer over a five-minute download says less than a number. */
+.tex-install__bar {
+  height: 4px;
+  margin-top: 7px;
+  border-radius: 2px;
+  background: var(--overlay-hover);
+  overflow: hidden;
+}
+.tex-install__bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--editor-cursor);
+  transition: width 0.25s ease;
+}
+
+.tex-install__spin {
+  animation: build-panel-spin 0.9s linear infinite;
+  color: var(--editor-cursor);
+}
+
+/* ── PDF preview ──────────────────────────────────────────────────── */
+
+.pdf-preview {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-sans);
+}
+
+.pdf-preview__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 5px 8px 5px 12px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  user-select: none;
+}
+.pdf-preview__pages {
+  font-variant-numeric: tabular-nums;
+}
+.pdf-preview__spacer {
+  flex: 1;
+}
+.pdf-preview__button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.pdf-preview__button:hover:not(:disabled) {
+  background: var(--overlay-hover);
+  color: var(--text-primary);
+}
+.pdf-preview__button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.pdf-preview__button--on {
+  color: var(--editor-cursor);
+}
+
+.pdf-preview__spin {
+  animation: build-panel-spin 0.9s linear infinite;
+}
+
+.pdf-preview__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+}
+
+.pdf-preview__pages-host {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  /* Wide enough for the widest page, so zooming past the pane's width
+     scrolls sideways instead of centring the page half outside the box. */
+  min-width: min-content;
+}
+
+/* The page keeps a white ground and a shadow in both themes: a PDF is a
+   sheet of paper, and inverting it would misrepresent what will print. */
+.pdf-preview__page {
+  background: #ffffff;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.18);
+  line-height: 0;
+}
+/* Deliberately no `max-width`. The canvas is sized in both dimensions from
+   the page's own aspect ratio; a max-width would override the width the
+   moment the zoom passed the pane's, leave the height as set, and squash
+   the page — which is what "zooming squeezes the aspect ratio" was. */
+.pdf-preview__page canvas {
+  display: block;
+}
+
+.pdf-preview__message {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 100%;
+  min-height: 160px;
+  padding: 24px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  text-align: center;
+}
+.pdf-preview__message--error {
+  color: var(--status-error);
+}
+.pdf-preview__error-detail {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  word-break: break-word;
 }
 
 .source-editor {
@@ -3624,6 +4251,29 @@ td.source-cell--editing:hover {
   color: var(--text-tertiary);
   opacity: 0.45;
   cursor: default;
+}
+
+/* ── Find matches in the rich view ────────────────────────────────── */
+
+/* Same two colours the source view uses for a match and the one you're on,
+   so the highlight means the same thing in both editors. */
+.rich-find-match {
+  background: var(--editor-match);
+  border-radius: 2px;
+}
+.rich-find-match--current {
+  background: var(--editor-match-current);
+  outline: 1px solid var(--editor-match-outline);
+}
+
+/* An attribute match — inside a formula, the preamble, a raw block — can't
+   be drawn on the character, so the node that holds it is ringed instead. */
+.rich-find-node {
+  box-shadow: 0 0 0 2px var(--editor-match);
+  border-radius: 3px;
+}
+.rich-find-node--current {
+  box-shadow: 0 0 0 2px var(--editor-match-current);
 }
 
 .find-widget__note {

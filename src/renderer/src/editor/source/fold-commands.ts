@@ -1,6 +1,7 @@
 import { foldEffect, foldable, foldedRanges, unfoldAll } from '@codemirror/language'
 import type { EditorState, StateEffect } from '@codemirror/state'
 import type { Command, EditorView } from '@codemirror/view'
+import { SECTION_MACRO_PATTERN } from '../sections'
 
 // Collapsing a paper by outline level.
 //
@@ -11,7 +12,10 @@ import type { Command, EditorView } from '@codemirror/view'
 // want. That is VS Code's "Fold Level N", and on a LaTeX file the levels are
 // already named — \section, \subsection, \subsubsection.
 
-const HEADING_RE = /^\s*\\(part|chapter|section|subsection|subsubsection)\*?\s*\{/
+// Same macro list the outline and the fold service use — see `sections.ts`.
+const HEADING_RE = new RegExp(
+  `^\\s*\\\\(${SECTION_MACRO_PATTERN})\\*?\\s*(?:\\[[^\\]]*\\])?\\s*\\{`
+)
 
 /** Which heading macro each outline level collapses. */
 const LEVEL_MACROS: Record<number, string[]> = {

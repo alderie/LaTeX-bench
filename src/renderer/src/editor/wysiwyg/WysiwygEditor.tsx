@@ -22,8 +22,9 @@ import { captionNodeView } from './nodeviews/CaptionNodeView'
 import { footnoteNodeView } from './nodeviews/FootnoteNodeView'
 import { mathInlineInputRule, mathBlockInputRule } from './inputRules'
 import { slashMenu } from './slashMenu'
+import { richFind } from './find-replace'
 import { blockDeleteKeymap, blockHandle } from './block-delete'
-import { publishSelection, setActiveEditorView } from './editor-bridge'
+import { notifyEditorUpdate, publishSelection, setActiveEditorView } from './editor-bridge'
 import * as labelRegistry from './labelRegistry'
 import { usePaperStore } from '../../stores/paperStore'
 
@@ -33,7 +34,9 @@ export function WysiwygEditor(): React.JSX.Element {
   // Kept so unmount can flush a pending save rather than dropping it.
   const syncRef = useRef<DeferredSync | null>(null)
   const paperId = usePaperStore((s) => s.paperId)
-  const setTex = usePaperStore((s) => s.setTex)
+  // The rich view is built from one file's source, so swapping which file is
+  // active has to rebuild it — the same as swapping papers.
+  const activeFile = usePaperStore((s) => s.activeFile)
   // Load happens async — keep an effect-local cancel flag.
   useEffect(() => {
     if (!hostRef.current || !paperId) return undefined
@@ -80,6 +83,7 @@ export function WysiwygEditor(): React.JSX.Element {
           keymap(blockDeleteKeymap),
           keymap(baseKeymap),
           blockHandle(),
+          richFind(),
           markChanges()
         ]
       })
@@ -94,7 +98,14 @@ export function WysiwygEditor(): React.JSX.Element {
         try {
           const serialized = serializeDocToLatex(docNow)
           const cur = usePaperStore.getState()
-          if (cur.tex !== serialized && !cur.applyingExternal) setTex(serialized)
+          if (cur.applyingExternal) return
+          // Named, not implied. Unmounting flushes a pending serialize, and
+          // unmounting is exactly what switching files does — so by the time
+          // this runs the store's active file may already be the *next* one,
+          // and an unnamed write would file this document's contents under
+          // that name and overwrite it.
+          if (activeFile === cur.activeFile && cur.tex === serialized) return
+          cur.setTexForFile(activeFile, serialized)
         } catch (err) {
           console.error('[wysiwyg] serialize failed:', err)
         }
@@ -122,6 +133,7 @@ export function WysiwygEditor(): React.JSX.Element {
           // Cheap, and a no-op unless the toolbar's view of the selection
           // actually changed — see editor-bridge.
           publishSelection(newState)
+          notifyEditorUpdate()
         }
       })
       // Initial population — this is what populates labels for the
@@ -142,7 +154,7 @@ export function WysiwygEditor(): React.JSX.Element {
       viewRef.current = null
       host.replaceChildren()
     }
-  }, [paperId, setTex])
+  }, [paperId, activeFile])
 
   return <div ref={hostRef} className="wysiwyg-editor" />
 }

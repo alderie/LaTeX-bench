@@ -1,4 +1,5 @@
 import { app, shell, BrowserWindow, ipcMain, Menu, protocol } from 'electron'
+import { existsSync } from 'fs'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import type { AppSettings, McpStatusInfo } from '../shared/types'
@@ -8,11 +9,13 @@ import { registerPaperProtocol } from './paper/protocol'
 // Type-only imports keep heavy modules out of cold-start.
 import type { McpPaperServer } from './mcp/mcp-server'
 import type { LatexCompiler } from './latex/compiler'
+import type { TexInstaller } from './latex/tex-install'
 
 let mainWindow: BrowserWindow | null = null
 let storeManager: PaperStoreManager | null = null
 let mcpServer: McpPaperServer | null = null
 let compiler: LatexCompiler | null = null
+let texInstaller: TexInstaller | null = null
 
 // Tracks the resolved theme so a window created later starts with the
 // right background instead of flashing white.
@@ -34,6 +37,14 @@ async function getCompiler(): Promise<LatexCompiler> {
     compiler = new LatexCompiler(mainWindow!)
   }
   return compiler
+}
+
+async function getTexInstaller(): Promise<TexInstaller> {
+  if (!texInstaller) {
+    const { TexInstaller } = await import('./latex/tex-install')
+    texInstaller = new TexInstaller(storeManager!.rootDir, mainWindow!)
+  }
+  return texInstaller
 }
 
 /** Fixed port the MCP server binds to — also baked into the configs we write. */
@@ -189,47 +200,87 @@ app.whenReady().then(async () => {
   // ── Paper library / IO ──
   ipcMain.handle('paper:list', async () => storeManager!.listPapers())
 
-  ipcMain.handle('paper:create', async (_, title: string) =>
-    storeManager!.createPaper(title)
-  )
+  ipcMain.handle('paper:create', async (_, title: string) => storeManager!.createPaper(title))
 
-  ipcMain.handle('paper:delete', async (_, paperId: string) =>
-    storeManager!.deletePaper(paperId)
-  )
+  ipcMain.handle('paper:delete', async (_, paperId: string) => storeManager!.deletePaper(paperId))
 
   ipcMain.handle('paper:rename', async (_, paperId: string, title: string) =>
     storeManager!.renamePaper(paperId, title)
   )
 
-  ipcMain.handle('paper:readTex', async (_, paperId: string) =>
-    storeManager!.readTex(paperId)
-  )
+  ipcMain.handle('paper:readTex', async (_, paperId: string) => storeManager!.readTex(paperId))
 
   ipcMain.handle('paper:writeTex', async (_, paperId: string, tex: string) =>
     storeManager!.writeTex(paperId, tex)
   )
 
-  ipcMain.handle('paper:readBib', async (_, paperId: string) =>
-    storeManager!.readBib(paperId)
-  )
+  ipcMain.handle('paper:readBib', async (_, paperId: string) => storeManager!.readBib(paperId))
 
   ipcMain.handle('paper:writeBib', async (_, paperId: string, bib: string) =>
     storeManager!.writeBib(paperId, bib)
+  )
+
+  ipcMain.handle('paper:readTexFile', async (_, paperId: string, relPath: string) =>
+    storeManager!.readTexFile(paperId, relPath)
+  )
+
+  ipcMain.handle('paper:writeTexFile', async (_, paperId: string, relPath: string, tex: string) =>
+    storeManager!.writeTexFile(paperId, relPath, tex)
+  )
+
+  ipcMain.handle('paper:texFileExists', async (_, paperId: string, relPath: string) =>
+    storeManager!.texFileExists(paperId, relPath)
+  )
+
+  ipcMain.handle('paper:listTexFiles', async (_, paperId: string) =>
+    storeManager!.listTexFiles(paperId)
   )
 
   ipcMain.handle('paper:getSettings', async (_, paperId: string) =>
     storeManager!.getSettings(paperId)
   )
 
-  ipcMain.handle(
-    'paper:saveSettings',
-    async (_, paperId: string, settings) => storeManager!.saveSettings(paperId, settings)
+  ipcMain.handle('paper:saveSettings', async (_, paperId: string, settings) =>
+    storeManager!.saveSettings(paperId, settings)
   )
 
   // ── LaTeX compilation (lazy) ──
   ipcMain.handle('latex:detectEngines', async () => {
     const { detectEngines } = await import('./latex/engine-detect')
-    return detectEngines()
+    return detectEngines(storeManager!.rootDir)
+  })
+
+  // ── Managed TeX installation ──
+  ipcMain.handle('tex:getState', async () => {
+    const { hasSystemTex } = await import('./latex/engine-detect')
+    return (await getTexInstaller()).getState(await hasSystemTex())
+  })
+
+  ipcMain.handle('tex:install', async () => (await getTexInstaller()).install())
+
+  ipcMain.handle('tex:cancel', async () => {
+    const installer = await getTexInstaller()
+    installer.cancel()
+    return installer.getState(false)
+  })
+
+  ipcMain.handle('tex:remove', async () => {
+    const installer = await getTexInstaller()
+    await installer.remove()
+    const { hasSystemTex } = await import('./latex/engine-detect')
+    return installer.getState(await hasSystemTex())
+  })
+
+  ipcMain.handle('tex:installPackages', async (_, names: string[]) =>
+    (await getTexInstaller()).addPackages(names)
+  )
+
+  ipcMain.handle('tex:reveal', async () => {
+    const { managedTexDir } = await import('./latex/managed-tex')
+    const dir = managedTexDir(storeManager!.rootDir)
+    // Showing the parent when the folder is absent still lands the user
+    // somewhere real rather than doing nothing.
+    shell.openPath(existsSync(dir) ? dir : storeManager!.rootDir).catch(() => undefined)
   })
 
   ipcMain.handle('latex:build', async (_, paperId: string) =>
@@ -241,9 +292,7 @@ app.whenReady().then(async () => {
     return compiler.cancel(paperId)
   })
 
-  ipcMain.handle('latex:readPdf', async (_, paperId: string) =>
-    storeManager!.readPdf(paperId)
-  )
+  ipcMain.handle('latex:readPdf', async (_, paperId: string) => storeManager!.readPdf(paperId))
 
   // ── MCP server (lazy) ──
   ipcMain.handle('mcp:start', async () => (await getMcpServer()).start(MCP_PORT))
@@ -288,6 +337,7 @@ app.on('window-all-closed', () => {
 
 function cleanupServices(): void {
   if (compiler) compiler.destroy()
+  if (texInstaller) texInstaller.destroy()
   if (mcpServer) mcpServer.stop().catch(() => undefined)
 }
 

@@ -49,14 +49,29 @@ const nodes: { [name: string]: NodeSpec } = {
     group: 'block',
     atom: true,
     selectable: true,
-    attrs: { source: { default: '' } },
+    // `fragment` marks a file that has no `\begin{document}` of its own —
+    // one of the section files a paper `\input`s. It is what stops the
+    // serializer from wrapping the fragment in a document environment and
+    // corrupting it on the first save.
+    attrs: { source: { default: '' }, fragment: { default: false } },
     parseDOM: [
       {
         tag: 'div[data-preamble]',
-        getAttrs: (dom) => ({ source: (dom as HTMLElement).dataset.source ?? '' })
+        getAttrs: (dom) => ({
+          source: (dom as HTMLElement).dataset.source ?? '',
+          fragment: (dom as HTMLElement).dataset.fragment === 'true'
+        })
       }
     ],
-    toDOM: (node) => ['div', { 'data-preamble': '', 'data-source': node.attrs.source as string }, '']
+    toDOM: (node) => [
+      'div',
+      {
+        'data-preamble': '',
+        'data-source': node.attrs.source as string,
+        'data-fragment': String(node.attrs.fragment as boolean)
+      },
+      ''
+    ]
   },
 
   section: {

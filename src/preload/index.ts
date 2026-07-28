@@ -11,6 +11,8 @@ import type {
   PaperMeta,
   PaperSettings,
   SettingsAPI,
+  TexAPI,
+  TexInstallProgress,
   WindowAPI,
   WindowState
 } from '../shared/types'
@@ -25,6 +27,13 @@ const paperAPI: PaperAPI = {
   writeTex: (paperId: string, tex: string) => ipcRenderer.invoke('paper:writeTex', paperId, tex),
   readBib: (paperId: string) => ipcRenderer.invoke('paper:readBib', paperId),
   writeBib: (paperId: string, bib: string) => ipcRenderer.invoke('paper:writeBib', paperId, bib),
+  readTexFile: (paperId: string, relPath: string) =>
+    ipcRenderer.invoke('paper:readTexFile', paperId, relPath),
+  writeTexFile: (paperId: string, relPath: string, tex: string) =>
+    ipcRenderer.invoke('paper:writeTexFile', paperId, relPath, tex),
+  texFileExists: (paperId: string, relPath: string) =>
+    ipcRenderer.invoke('paper:texFileExists', paperId, relPath),
+  listTexFiles: (paperId: string) => ipcRenderer.invoke('paper:listTexFiles', paperId),
   getSettings: (paperId: string) => ipcRenderer.invoke('paper:getSettings', paperId),
   saveSettings: (paperId: string, settings: PaperSettings) =>
     ipcRenderer.invoke('paper:saveSettings', paperId, settings),
@@ -51,6 +60,20 @@ const latexAPI: LatexAPI = {
     const listener = (_: unknown, e: BuildResult) => cb(e)
     ipcRenderer.on('latex:build-complete', listener)
     return () => ipcRenderer.removeListener('latex:build-complete', listener)
+  }
+}
+
+const texAPI: TexAPI = {
+  getState: () => ipcRenderer.invoke('tex:getState'),
+  install: () => ipcRenderer.invoke('tex:install'),
+  cancel: () => ipcRenderer.invoke('tex:cancel'),
+  remove: () => ipcRenderer.invoke('tex:remove'),
+  installPackages: (names: string[]) => ipcRenderer.invoke('tex:installPackages', names),
+  reveal: () => ipcRenderer.invoke('tex:reveal'),
+  onProgress: (cb) => {
+    const listener = (_: unknown, progress: TexInstallProgress): void => cb(progress)
+    ipcRenderer.on('tex:install-progress', listener)
+    return () => ipcRenderer.removeListener('tex:install-progress', listener)
   }
 }
 
@@ -93,6 +116,7 @@ if (process.contextIsolated) {
     contextBridge.exposeInMainWorld('electron', electronAPI)
     contextBridge.exposeInMainWorld('paperAPI', paperAPI)
     contextBridge.exposeInMainWorld('latexAPI', latexAPI)
+    contextBridge.exposeInMainWorld('texAPI', texAPI)
     contextBridge.exposeInMainWorld('mcpAPI', mcpAPI)
     contextBridge.exposeInMainWorld('settingsAPI', settingsAPI)
     contextBridge.exposeInMainWorld('windowAPI', windowAPI)
@@ -107,6 +131,8 @@ if (process.contextIsolated) {
   // @ts-ignore
   window.latexAPI = latexAPI
   // @ts-ignore
+  window.texAPI = texAPI
+  // @ts-ignore
   window.mcpAPI = mcpAPI
   // @ts-ignore
   window.settingsAPI = settingsAPI
@@ -116,4 +142,4 @@ if (process.contextIsolated) {
 
 // Re-export types for tooling — not actually emitted by tsc since this file
 // is consumed at runtime via electron-vite's preload build.
-export type { PaperAPI, LatexAPI, McpAPI, SettingsAPI, WindowAPI, EngineInfo, PaperMeta }
+export type { PaperAPI, LatexAPI, McpAPI, SettingsAPI, TexAPI, WindowAPI, EngineInfo, PaperMeta }

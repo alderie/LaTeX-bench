@@ -28,7 +28,11 @@ export function useBuild(): void {
         log: result.log,
         pdfPath: result.pdfPath,
         errors: result.errors,
-        durationMs: result.durationMs
+        missingPackages: result.missingPackages,
+        durationMs: result.durationMs,
+        // A rebuild writes the same path, so the path alone can't tell the
+        // preview that the bytes behind it changed.
+        revision: cur.build.revision + 1
       })
     })
 
@@ -58,7 +62,7 @@ export function useBuild(): void {
       debounceTimer.current = setTimeout(() => {
         const cur = usePaperStore.getState()
         if (!cur.paperId) return
-        cur.setBuildState({ state: 'running', errors: [], log: '' })
+        cur.setBuildState({ state: 'running', errors: [], missingPackages: [], log: '' })
         void window.latexAPI.build(cur.paperId).catch((err) => {
           cur.setBuildState({
             state: 'error',

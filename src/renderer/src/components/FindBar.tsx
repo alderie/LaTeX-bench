@@ -28,18 +28,32 @@ import {
   subscribeSourceUpdate,
   subscribeSourceView
 } from '../editor/source/source-bridge'
+import { getActiveEditorView, subscribeEditorUpdate } from '../editor/wysiwyg/editor-bridge'
+import {
+  richClear,
+  richReplace,
+  richReplaceAll,
+  richSearch,
+  richStep,
+  richSummary
+} from '../editor/wysiwyg/find-replace'
 
 // Find and replace, in the shape everyone already knows.
 //
 // This used to be two widgets fighting each other: a hand-rolled bar on
 // `window.find`, and CodeMirror's own search panel — both bound to Ctrl+F, so
 // the key opened both, stacked, neither of them the one you meant. There is
-// one widget now. In the source view it drives CodeMirror's search state
-// directly (so regex, whole-word, case, and `$1` group replacement are the
-// real implementations, not an approximation), and CodeMirror's panel never
-// opens. In the rich view, where there is no CodeMirror, it falls back to
-// `window.find` for navigation and says so instead of offering a replace it
-// can't perform.
+// one widget now, and it drives whichever editor is up.
+//
+// In the source view that is CodeMirror's own search state, so regex,
+// whole-word, case, and `$1` group replacement are the real implementations
+// rather than an approximation. In the rich view it is a search over the
+// ProseMirror document — which is the part that used to be missing. The
+// fallback there was `window.find`: no replace, no count, and blind to
+// anything not painted, which is to say blind to the preamble, to every
+// formula's LaTeX, and to any block that wasn't open. Both halves now offer
+// the same operations, so the widget no longer has to apologise for one of
+// them.
 
 const TOGGLES: Array<{
   key: keyof FindOptions
@@ -70,12 +84,12 @@ export function FindBar(): React.JSX.Element | null {
   const findInput = useRef<HTMLInputElement | null>(null)
   const replaceInput = useRef<HTMLInputElement | null>(null)
 
-  // Whether there is a CodeMirror to drive. In the rich-text view there
-  // isn't, and the widget degrades rather than lying about what it can do.
+  // Which editor is up. Both can search and replace now; the difference is
+  // only which implementation the widget talks to.
   const hasSource = useSourceViewPresent()
 
   /**
-   * Push the current query into CodeMirror and recount.
+   * Push the current query into the active editor and recount.
    *
    * One function for both because they must not diverge: the highlighter and
    * the "3 of 17" read the same query object, so a count can never describe a
@@ -84,30 +98,37 @@ export function FindBar(): React.JSX.Element | null {
   const apply = useCallback(
     (nextQuery: string, nextReplace: string, nextOptions: FindOptions): void => {
       const view = getActiveSourceView()
-      if (!view) {
+      if (view) {
+        const search = buildQuery(nextQuery, nextReplace, nextOptions)
+        view.dispatch({ effects: setSearchQuery.of(search) })
+        const { main } = view.state.selection
+        setSummary(summarizeMatches(view.state, search, main.from, main.to))
+        return
+      }
+      const rich = getActiveEditorView()
+      if (!rich) {
         setSummary(NO_MATCHES)
         return
       }
-      const search = buildQuery(nextQuery, nextReplace, nextOptions)
-      view.dispatch({ effects: setSearchQuery.of(search) })
-      const { main } = view.state.selection
-      setSummary(summarizeMatches(view.state, search, main.from, main.to))
+      setSummary(richSearch(rich, nextQuery, nextOptions))
     },
     [setSummary]
   )
 
-  // Re-apply whenever the query, the replacement, or a toggle changes.
+  // Re-apply whenever the query, the replacement, or a toggle changes —
+  // and when the view flips under an open widget, since that swaps which
+  // editor the query has to be pushed into.
   useEffect(() => {
     if (!open) return
     apply(query, replaceWith, options)
-  }, [open, query, replaceWith, options, apply])
+  }, [open, query, replaceWith, options, hasSource, apply])
 
   // …and recount when the document or selection moves under us, so the
   // position advances as you step through matches and the total drops as you
   // replace them.
   useEffect(() => {
     if (!open) return undefined
-    return subscribeSourceUpdate(() => {
+    const fromSource = subscribeSourceUpdate(() => {
       const view = getActiveSourceView()
       if (!view) return
       const search = buildQuery(
@@ -118,6 +139,16 @@ export function FindBar(): React.JSX.Element | null {
       const { main } = view.state.selection
       setSummary(summarizeMatches(view.state, search, main.from, main.to))
     })
+    const fromRich = subscribeEditorUpdate(() => {
+      if (getActiveSourceView()) return
+      const rich = getActiveEditorView()
+      if (!rich) return
+      setSummary(richSummary(rich))
+    })
+    return () => {
+      fromSource()
+      fromRich()
+    }
   }, [open, setSummary])
 
   // Opening seeds from the selection, the way every editor does: select a
@@ -125,9 +156,14 @@ export function FindBar(): React.JSX.Element | null {
   useEffect(() => {
     if (!open) return
     const view = getActiveSourceView()
-    const selected = view
-      ? view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to)
-      : ''
+    const rich = getActiveEditorView()
+    let selected = ''
+    if (view) {
+      selected = view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to)
+    } else if (rich) {
+      const { from, to } = rich.state.selection
+      selected = from === to ? '' : rich.state.doc.textBetween(from, to, ' ', ' ')
+    }
     if (selected && selected.length <= 200 && !selected.includes('\n')) {
       useFindStore.getState().setQuery(selected)
     }
@@ -140,46 +176,52 @@ export function FindBar(): React.JSX.Element | null {
   useEffect(() => {
     if (open) return
     const view = getActiveSourceView()
-    if (!view) return
-    view.dispatch({ effects: setSearchQuery.of(emptyQuery()) })
+    if (view) {
+      view.dispatch({ effects: setSearchQuery.of(emptyQuery()) })
+      return
+    }
+    const rich = getActiveEditorView()
+    if (rich) richClear(rich)
   }, [open])
 
   const close = useCallback((): void => {
     closeFind()
-    getActiveSourceView()?.focus()
+    const view = getActiveSourceView()
+    if (view) view.focus()
+    else getActiveEditorView()?.focus()
   }, [closeFind])
 
   const step = useCallback(
     (backwards: boolean): void => {
+      if (!query) return
       const view = getActiveSourceView()
-      if (!view) {
-        // Rich-text view: Chromium's own find, which walks the real DOM.
-        if (query) {
-          ;(window as { find?: (...args: unknown[]) => boolean }).find?.(
-            query,
-            options.caseSensitive,
-            backwards,
-            true,
-            false,
-            true,
-            false
-          )
-        }
+      if (view) {
+        ;(backwards ? findPrevious : findNext)(view)
         return
       }
-      if (!query) return
-      ;(backwards ? findPrevious : findNext)(view)
+      const rich = getActiveEditorView()
+      if (rich) setSummary(richStep(rich, backwards))
     },
-    [query, options.caseSensitive]
+    [query, setSummary]
   )
 
   const doReplace = useCallback(
     (all: boolean): void => {
+      if (!query) return
       const view = getActiveSourceView()
-      if (!view || !query) return
-      ;(all ? replaceAll : replaceNext)(view)
+      if (view) {
+        ;(all ? replaceAll : replaceNext)(view)
+        return
+      }
+      const rich = getActiveEditorView()
+      if (!rich) return
+      setSummary(
+        all
+          ? richReplaceAll(rich, useFindStore.getState().replace)
+          : richReplace(rich, useFindStore.getState().replace)
+      )
     },
-    [query]
+    [query, setSummary]
   )
 
   /** Alt+C / Alt+W / Alt+R, from either field. VS Code's bindings. */
@@ -310,7 +352,6 @@ export function FindBar(): React.JSX.Element | null {
                 placeholder={options.regexp ? 'Replace  ($1 for groups)' : 'Replace'}
                 aria-label="Replace"
                 spellCheck={false}
-                disabled={!hasSource}
                 className="find-widget__input"
                 onKeyDown={(e) => {
                   if (optionShortcut(e)) return
@@ -328,7 +369,7 @@ export function FindBar(): React.JSX.Element | null {
               className="find-widget__button"
               title="Replace  (Enter)"
               aria-label="Replace"
-              disabled={!hasSource || !query}
+              disabled={!query}
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => doReplace(false)}
             >
@@ -338,14 +379,17 @@ export function FindBar(): React.JSX.Element | null {
               className="find-widget__button"
               title="Replace all  (Ctrl+Enter)"
               aria-label="Replace all"
-              disabled={!hasSource || !query}
+              disabled={!query}
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => doReplace(true)}
             >
               <ReplaceAll size={14} />
             </button>
+            {/* The rich view searches the document, not the page, so it
+                reaches into formulas and the preamble. Worth saying, because
+                a match you can't see is otherwise a surprising one. */}
             {!hasSource && (
-              <span className="find-widget__note">Replace works in the LaTeX view</span>
+              <span className="find-widget__note">Includes formulas and the preamble</span>
             )}
           </div>
         )}

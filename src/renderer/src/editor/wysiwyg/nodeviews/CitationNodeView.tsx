@@ -39,16 +39,22 @@ class CitationView implements NodeView {
     const allResolved = resolved.every((r) => r.ref !== undefined)
     this.dom.classList.toggle('citation--unresolved', !allResolved)
 
-    // Anchor the link at the first resolvable key.
-    const firstAnchor = resolved.find((r) => r.ref !== undefined)?.ref?.domAnchor
+    // Anchor the link at the first key that has something on the page to
+    // scroll to. A key resolved from `references.bib` has a number and a
+    // label but no `\bibitem` in the document, so it is not a link.
+    const firstAnchor = resolved.find((r) => r.ref?.source === 'bibitem')?.ref?.domAnchor
     if (firstAnchor) {
       ;(this.dom as HTMLAnchorElement).href = `#${firstAnchor}`
     } else {
       this.dom.removeAttribute('href')
     }
 
-    // Tooltip lists the underlying keys for debugging.
-    this.dom.title = keys.join(', ')
+    // The tooltip is the reference itself where we know it, and the raw keys
+    // where we don't — which is also how you tell a typo'd key from a real
+    // one without opening the .bib.
+    this.dom.title = resolved
+      .map((r) => (r.ref?.summary ? `${r.key} — ${r.ref.summary}` : r.key))
+      .join('\n')
 
     if (!allResolved) {
       this.dom.textContent = `[${keys.join(', ')}]`

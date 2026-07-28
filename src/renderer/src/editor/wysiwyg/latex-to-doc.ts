@@ -1868,10 +1868,37 @@ function inlineNodes(nodes: AstNodeArr, printRaw: (n: AstNodeArr) => string): PM
       const consumed = absorbTrailingArg(nodes, i, n)
       if (consumed.consumed > 0) i += consumed.consumed
       const node = macroToInline(consumed.macro, printRaw)
-      if (Array.isArray(node)) out.push(...node)
-      else if (node) out.push(node)
+      if (Array.isArray(node)) {
+        out.push(...node)
+      } else if (node) {
+        // A macro nobody has a signature for arrives as a bare macro
+        // followed by loose `group` siblings, which the branch below
+        // renders transparently — so `\mymacro{a}{b}` serialized back as
+        // `\mymacroab`, an undefined control sequence that fails the
+        // build. Adjacent groups belong to the macro; keep them with it.
+        i = absorbUnknownArgs(out, node, nodes, i, printRaw)
+      }
     } else if (n.type === 'group') {
-      // Treat groups as transparent — their contents are inline.
+      // An empty group is not nothing. `{}` is how you stop a following
+      // `[` being read as an optional argument, how you keep a `-` out of
+      // a ligature, and — after a control word — how `\TeX{}book` avoids
+      // being the single undefined macro `\TeXbook`. Dropped, it also left
+      // a double space that the next save collapsed, so the file drifted
+      // for as long as it was open.
+      //
+      // Not after a macro, though. There the `{}` is a spacing guard, and
+      // the serializer re-creates it from the shape of what follows — see
+      // `needsSpacingGuard`, which is what keeps `\TeX{}book` from fusing
+      // into `\TeXbook`. Keeping this one as well would either double it
+      // (`\ss{}{}`) or add a node on every reload.
+      if ((n.content ?? []).length === 0) {
+        if ((nodes[i - 1] as any)?.type !== 'macro') {
+          flushText()
+          out.push(latexSchema.nodes.rawInline.create({ source: '{}', display: '' }))
+        }
+        continue
+      }
+      // Otherwise groups are transparent — their contents are inline.
       const nested = inlineNodes(n.content ?? [], printRaw)
       out.push(...nested)
     } else if (n.type === 'parbreak') {
@@ -1883,6 +1910,106 @@ function inlineNodes(nodes: AstNodeArr, printRaw: (n: AstNodeArr) => string): PM
 
   flushText()
   return out
+}
+
+/**
+ * How far the `[…]` and `{…}` runs immediately after `from` extend.
+ *
+ * Tight binding only — a space between the macro and a brace means the
+ * brace is a group in the prose, not an argument, and absorbing it would
+ * change what the document says.
+ */
+function scanTrailingArguments(from: number): number {
+  let cursor = from
+  for (;;) {
+    const open = sourceText[cursor]
+    if (open !== '[' && open !== '{') return cursor
+    const close = open === '[' ? ']' : '}'
+    let depth = 0
+    let i = cursor
+    for (; i < sourceText.length; i++) {
+      const c = sourceText[i]
+      if (c === '\\') {
+        i++
+        continue
+      }
+      if (c === open) depth++
+      else if (c === close) {
+        depth--
+        if (depth === 0) break
+      }
+    }
+    if (i >= sourceText.length) return cursor
+    cursor = i + 1
+  }
+}
+
+/**
+ * Keep a signature-less macro's arguments attached to it.
+ *
+ * `absorbTrailingArg` above does this for a fixed list of `\cite`-family
+ * macros. This is the general case, and it is about round-tripping rather
+ * than understanding: a macro from a `.sty` we've never seen has no
+ * signature, so unified-latex hands back `\mymacro` and then `{a}`, `{b}`
+ * as separate sibling groups. Rendering those transparently — which is
+ * right for a real group — writes `\mymacroab` back to the file.
+ *
+ * Every immediately-adjacent group is absorbed into the macro's source
+ * verbatim. Whether the macro really takes that many arguments is not
+ * knowable here and does not matter: emitting the original bytes is
+ * correct either way, and it is the only answer that cannot corrupt.
+ *
+ * Returns the index the caller's loop should continue from.
+ */
+function absorbUnknownArgs(
+  out: PMNode[],
+  node: PMNode,
+  nodes: AstNodeArr,
+  index: number,
+  printRaw: (n: AstNodeArr) => string
+): number {
+  const isBareUnknown =
+    node.type.name === 'rawInline' &&
+    node.attrs.source === node.attrs.display &&
+    /^\\[A-Za-z@]+$/.test((node.attrs.source as string) ?? '')
+
+  if (!isBareUnknown) {
+    out.push(node)
+    return index
+  }
+
+  // Driven off source offsets rather than AST shape. `[opt]` does not
+  // arrive as one node — it is a `[`, an `opt` and a `]` string — so
+  // matching on node types misses exactly the case that reorders arguments.
+  const macroSpan = spanOf(nodes[index])
+  if (!macroSpan) {
+    out.push(node)
+    return index
+  }
+  const argsEnd = scanTrailingArguments(macroSpan[1])
+  if (argsEnd === macroSpan[1]) {
+    out.push(node)
+    return index
+  }
+
+  let cursor = index
+  let display = ''
+  while (cursor + 1 < nodes.length) {
+    const span = spanOf(nodes[cursor + 1])
+    if (!span || span[1] > argsEnd) break
+    const next = nodes[cursor + 1] as any
+    if (next.type === 'group') display = printRaw(next.content ?? []).trim()
+    cursor++
+  }
+  const source = sourceText.slice(macroSpan[0], argsEnd)
+  out.push(
+    latexSchema.nodes.rawInline.create({
+      // The last argument is the visible one in almost every user macro.
+      source,
+      display: display || (node.attrs.display as string)
+    })
+  )
+  return cursor
 }
 
 // Macros whose semantics require a brace argument that unified-latex
@@ -2148,19 +2275,20 @@ function macroToInline(macro: any, printRaw: (n: AstNodeArr) => string): PMNode 
     })
   }
 
-  // Unknown inline macro. If it has a `{...}` arg, recurse into the LAST
-  // one — that's almost always the visible text in user-defined macros
-  // like `\Colorhref{color}{url}{text}`.
+  // Unknown inline macro that captured its arguments.
   //
-  // unified-latex doesn't know the signatures of user-defined macros, so
-  // for things like `\Colorhref[opt]{a}{b}` the args list is empty and
-  // the `[opt]` / `{a}` / `{b}` end up as following AST nodes — `[opt]`
-  // as raw text, `{a}` and `{b}` as `group` nodes that the inline loop
-  // recurses through transparently. Returning null here drops the
-  // macro name itself; the group contents still render.
+  // This used to recurse into the last `{…}` and return only that, on the
+  // theory that it holds the visible text. It also threw away the macro
+  // name and every other argument: `\pair{a}{b}` came back as `b`, and the
+  // author's own `\newcommand` was deleted from their file on the next
+  // save. The whole call is kept verbatim instead, and the last argument
+  // is what gets shown — which was the only good half of the old idea.
   const args = (macro.args ?? []).filter((a: any) => a.openMark === '{')
   if (args.length > 0) {
-    return inlineNodes(args[args.length - 1].content ?? [], printRaw)
+    return latexSchema.nodes.rawInline.create({
+      source: rawOf(macro, printRaw),
+      display: printRaw(args[args.length - 1].content ?? []).trim()
+    })
   }
   // A zero-argument macro we know nothing about. Dropping it silently
   // deleted it from the user's .tex on the next save; keep the source

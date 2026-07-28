@@ -402,11 +402,16 @@ function serializeInline(node: PMNode): string {
 // TeX eats the whitespace after a control word, so `\LaTeX Round` sets
 // "LaTeXRound". When a bare macro is followed by text that starts with a
 // space, the macro needs a `{}` (or a backslash-space) to hold the gap open.
+//
+// A following *letter* is worse than lost spacing: `\TeX` and `book` written
+// adjacently are not a macro and a word, they are the single control
+// sequence `\TeXbook`, which is undefined and stops the build. `\TeX{}book`
+// is exactly what the author wrote, and the empty group is why.
 function needsSpacingGuard(source: string, next: PMNode | undefined): boolean {
   if (!/^\\[A-Za-z@]+$/.test(source)) return false
   if (!next) return false
   if (!next.isText) return false
-  return /^\s/.test(next.text ?? '')
+  return /^[\s A-Za-z@]/.test(next.text ?? '')
 }
 
 function serializeInlineChild(node: PMNode, next?: PMNode): string {

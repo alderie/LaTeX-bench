@@ -132,6 +132,40 @@ export function panelButton(
   return button
 }
 
+/**
+ * A two-state control on the bar, labelled with text rather than a glyph.
+ *
+ * For the settings that are a yes/no about the block rather than a command:
+ * "is this numbered". A pressed toggle has to look pressed rather than
+ * hovered, so it carries its own modifier class instead of borrowing the
+ * button's.
+ */
+export function panelToggle(
+  text: string,
+  title: (pressed: boolean) => string,
+  pressed: boolean,
+  onChange: (next: boolean) => void
+): { dom: HTMLButtonElement; set: (next: boolean) => void } {
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.className = 'block-editor__toggle'
+  button.textContent = text
+
+  let state = pressed
+  const set = (next: boolean): void => {
+    state = next
+    button.classList.toggle('block-editor__toggle--on', state)
+    button.setAttribute('aria-pressed', String(state))
+    button.title = title(state)
+    button.setAttribute('aria-label', title(state))
+  }
+  set(pressed)
+
+  button.addEventListener('mousedown', (event) => event.preventDefault())
+  button.addEventListener('click', () => onChange(!state))
+  return { dom: button, set }
+}
+
 /** A static name on the bar, for a block whose kind isn't a choice. */
 export function panelName(text: string): HTMLElement {
   const name = document.createElement('span')

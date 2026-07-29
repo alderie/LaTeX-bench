@@ -15,7 +15,7 @@ import type { BuildError } from '@shared/types'
 import { usePaperStore } from '../stores/paperStore'
 import { useUiStore } from '../stores/uiStore'
 import { jumpToLine } from '../editor/navigate'
-import { MissingPackagesCard, TexInstallCard, useTexState } from './TexInstallCard'
+import { MissingPackagesCard, TexInstallCard, TexInstallChip, useTexState } from './TexInstallCard'
 
 // What the compiler said.
 //
@@ -73,38 +73,37 @@ function StateBadge({
 }
 
 export function BuildPanel(): React.JSX.Element | null {
-  const build = usePaperStore((s) => s.build)
+  // Field by field, not `s.build`. The store's build slice gets a new
+  // identity on every write to it, and the log is written to while a build
+  // streams — so selecting the whole object re-rendered the header, the tab
+  // strip and every row of the problem list on each batch of compiler output,
+  // for a value only the Log tab reads. It reads it itself now, below.
+  const state = usePaperStore((s) => s.build.state)
+  const durationMs = usePaperStore((s) => s.build.durationMs)
+  const errors = usePaperStore((s) => s.build.errors)
   const paperId = usePaperStore((s) => s.paperId)
   const open = useUiStore((s) => s.buildPanelOpen)
   const toggle = useUiStore((s) => s.toggleBuildPanel)
   const setOpen = useUiStore((s) => s.setBuildPanelOpen)
   const [showLog, setShowLog] = useState(false)
-  const logRef = useRef<HTMLPreElement | null>(null)
   useTexState()
 
-  const { errors, warnings } = useMemo(() => split(build.errors), [build.errors])
+  const { errors: hard, warnings } = useMemo(() => split(errors), [errors])
 
   // A failed build opens the panel. A successful one never closes it — if
   // you opened it to watch the log, it staying open is the point.
-  const lastState = useRef(build.state)
+  const lastState = useRef(state)
   useEffect(() => {
-    if (build.state === 'error' && lastState.current !== 'error') setOpen(true)
-    lastState.current = build.state
-  }, [build.state, setOpen])
-
-  // Follow the tail while a build streams, the way a terminal does.
-  useEffect(() => {
-    if (!showLog || !open) return
-    const el = logRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [build.log, showLog, open])
+    if (state === 'error' && lastState.current !== 'error') setOpen(true)
+    lastState.current = state
+  }, [state, setOpen])
 
   if (!paperId) return null
 
   const summary =
-    errors.length > 0 || warnings.length > 0
+    hard.length > 0 || warnings.length > 0
       ? [
-          errors.length > 0 ? `${errors.length} error${errors.length === 1 ? '' : 's'}` : '',
+          hard.length > 0 ? `${hard.length} error${hard.length === 1 ? '' : 's'}` : '',
           warnings.length > 0 ? `${warnings.length} warning${warnings.length === 1 ? '' : 's'}` : ''
         ]
           .filter(Boolean)
@@ -119,13 +118,13 @@ export function BuildPanel(): React.JSX.Element | null {
         aria-expanded={open}
         title={open ? 'Hide build results' : 'Show build results'}
       >
-        <StateBadge state={build.state} durationMs={build.durationMs} />
+        <StateBadge state={state} durationMs={durationMs} />
         {summary && (
           <span className="build-panel__summary">
-            {errors.length > 0 && (
+            {hard.length > 0 && (
               <span className="build-panel__count build-panel__count--error">
                 <XCircle size={12} strokeWidth={2.5} />
-                {errors.length}
+                {hard.length}
               </span>
             )}
             {warnings.length > 0 && (
@@ -149,7 +148,7 @@ export function BuildPanel(): React.JSX.Element | null {
             >
               <FileWarning size={12} />
               Problems
-              {build.errors.length > 0 ? ` (${build.errors.length})` : ''}
+              {errors.length > 0 ? ` (${errors.length})` : ''}
             </button>
             <button
               className={'build-panel__tab' + (showLog ? ' build-panel__tab--active' : '')}
@@ -158,6 +157,10 @@ export function BuildPanel(): React.JSX.Element | null {
               <ScrollText size={12} />
               Log
             </button>
+            <span className="build-panel__tabs-spacer" />
+            {/* A status, so it rides in the tab row rather than taking two
+                lines off the top of the problem list. */}
+            <TexInstallChip />
           </div>
 
           {/* Above the problem list, because when either shows at all it is
@@ -165,16 +168,34 @@ export function BuildPanel(): React.JSX.Element | null {
           <TexInstallCard />
           <MissingPackagesCard />
 
-          {showLog ? (
-            <pre className="build-panel__log" ref={logRef}>
-              {build.log ? build.log.slice(-MAX_LOG_CHARS) : 'No output yet.'}
-            </pre>
-          ) : (
-            <ProblemList errors={build.errors} />
-          )}
+          {showLog ? <BuildLog /> : <ProblemList errors={errors} />}
         </div>
       )}
     </div>
+  )
+}
+
+/**
+ * The compiler's output, tailed.
+ *
+ * Its own component so that it — and only it — subscribes to `build.log`. A
+ * pdflatex run emits thousands of lines, and having the panel around it
+ * re-render for each batch is how watching a build made typing stutter.
+ */
+function BuildLog(): React.JSX.Element {
+  const log = usePaperStore((s) => s.build.log)
+  const ref = useRef<HTMLPreElement | null>(null)
+
+  // Follow the tail, the way a terminal does.
+  useEffect(() => {
+    const el = ref.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [log])
+
+  return (
+    <pre className="build-panel__log" ref={ref}>
+      {log ? log.slice(-MAX_LOG_CHARS) : 'No output yet.'}
+    </pre>
   )
 }
 

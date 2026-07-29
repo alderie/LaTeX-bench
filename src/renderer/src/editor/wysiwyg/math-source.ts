@@ -45,28 +45,65 @@ export interface MathShell {
  * the author can still edit the body, they just don't get a switcher that
  * would mangle an environment we don't understand the arity of.
  */
-// `icon` names a glyph in `wysiwyg/icons`; `hint` carries the numbered/not
-// distinction so the label can stay the environment's plain name instead of
-// "Equation (numbered)". Both are inert data here — this module still does no
-// DOM work, and the dropdown is what turns them into a row.
-export const ENV_CHOICES: Array<{
+// Four shapes and a switch, not nine rows.
+//
+// The list used to be every switchable environment written out: Display,
+// Equation, Equation, Align, Align, Gather, Gather, Multline, Multline —
+// five of them duplicate labels, told apart only by a grey "numbered" at the
+// right-hand edge. Two problems with that. It asks the author to read the
+// same word twice and spot a modifier, when the question they have is
+// "should this one be numbered?" — which is a yes/no, and a yes/no belongs
+// on a switch. And `\[…\]` and `equation*` are the same environment: amsmath
+// defines one in terms of the other, they typeset identically, and offering
+// both as separate choices implies a difference that does not exist.
+//
+// So the dropdown lists the four shapes that actually differ, and numbering
+// is the toggle beside it. `\[` survives as the unnumbered form of a
+// document that already writes it that way — see `choiceFor`.
+//
+// `icon` names a glyph in `wysiwyg/icons`; `hint` says what the shape is for,
+// which is the thing the names don't. All inert data — this module does no
+// DOM work, and the dropdown is what turns a row into a row.
+export const ENV_FAMILIES: Array<{
   value: string
   label: string
   icon: string
   hint?: string
 }> = [
-  { value: '\\[', label: 'Display', icon: 'displayEnv' },
-  { value: 'equation', label: 'Equation', icon: 'equal', hint: 'numbered' },
-  { value: 'equation*', label: 'Equation', icon: 'equal' },
-  { value: 'align', label: 'Align', icon: 'alignEnv', hint: 'numbered' },
-  { value: 'align*', label: 'Align', icon: 'alignEnv' },
-  { value: 'gather', label: 'Gather', icon: 'gatherEnv', hint: 'numbered' },
-  { value: 'gather*', label: 'Gather', icon: 'gatherEnv' },
-  { value: 'multline', label: 'Multline', icon: 'multlineEnv', hint: 'numbered' },
-  { value: 'multline*', label: 'Multline', icon: 'multlineEnv' }
+  { value: 'equation', label: 'Equation', icon: 'equal', hint: 'one line' },
+  { value: 'align', label: 'Align', icon: 'alignEnv', hint: 'aligned at &' },
+  { value: 'gather', label: 'Gather', icon: 'gatherEnv', hint: 'centred lines' },
+  { value: 'multline', label: 'Multline', icon: 'multlineEnv', hint: 'one long line' }
 ]
 
-const SWITCHABLE = new Set(ENV_CHOICES.map((c) => c.value))
+/** Every wrapper the editor is willing to rewrite, whatever it offers. */
+const SWITCHABLE = new Set(['\\[', ...ENV_FAMILIES.flatMap(({ value }) => [value, `${value}*`])])
+
+/** Which of the four shapes a wrapper is, ignoring whether it's numbered. */
+export function familyOf(choice: string): string {
+  if (choice === '\\[') return 'equation'
+  return choice.endsWith('*') ? choice.slice(0, -1) : choice
+}
+
+/** Whether a wrapper gives the equation a number. */
+export function isNumberedChoice(choice: string): boolean {
+  return choice !== '\\[' && !choice.endsWith('*')
+}
+
+/**
+ * The wrapper for a shape and a numbering choice.
+ *
+ * `unnumberedDisplay` is how *this document* writes an unnumbered display —
+ * `\[…\]` or `equation*`. Carrying it through is what makes the toggle
+ * reversible: turning numbering on and off again gives back the source that
+ * was there, rather than quietly converting the author's `\[` to
+ * `equation*` (or the reverse) on the way past.
+ */
+export function choiceFor(family: string, numbered: boolean, unnumberedDisplay = '\\['): string {
+  if (numbered) return family
+  if (family === 'equation') return unnumberedDisplay === 'equation*' ? 'equation*' : '\\['
+  return `${family}*`
+}
 
 /**
  * Environments laid out as a grid, where `&` and `\\` mean something.

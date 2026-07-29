@@ -11,3 +11,5 @@ preview
 .env.local
 
 .claude/*
+# Scratch space for the Playwright driver used to check the app by hand.
+.run

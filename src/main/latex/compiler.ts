@@ -5,8 +5,7 @@ import { join } from 'path'
 import type { BrowserWindow } from 'electron'
 import type { BuildError, BuildResult, PaperSettings } from '../../shared/types'
 import type { PaperStoreManager } from '../store'
-import { parseLatexLog } from './log-parser'
-import { missingPackagesFromLog } from './tex-packages'
+import { analyseLog } from './log-analysis'
 import { managedExecutable, texEnv } from './managed-tex'
 
 // Spawns user-installed pdflatex / xelatex / latexmk. Streams progress lines
@@ -122,22 +121,35 @@ export class LatexCompiler {
           }
         }
 
-        const errors: BuildError[] = parseLatexLog(logText)
         const builtPdf = join(buildDir, baseName(settings.mainFile) + '.pdf')
         const finalPdf = join(outDir, 'main.pdf')
 
         let success = false
+        let copyError: string | null = null
         if (code === 0 && existsSync(builtPdf)) {
           try {
             await copyFile(builtPdf, finalPdf)
             success = true
           } catch (err) {
-            errors.push({
-              message: `Compiled PDF copy failed: ${(err as Error).message}`,
-              severity: 'error'
-            })
+            copyError = `Compiled PDF copy failed: ${(err as Error).message}`
           }
         }
+
+        // Reading the log is the expensive half of finishing a build — two
+        // regex walks over what can be megabytes of TeX's output — and it
+        // used to run right here, on the only thread the main process has,
+        // at the moment the renderer was asking for the new PDF and
+        // repainting the preview. Every IPC reply the window was waiting on
+        // queued behind it. See `log-analysis`, which moves the walk to a
+        // worker thread and falls back to doing it here if that isn't
+        // possible.
+        //
+        // Only a failed build is asked about missing packages: a successful
+        // run can still mention a file it didn't find on a first pass and
+        // then resolved.
+        const analysis = await analyseLog(logText, !success)
+        const errors: BuildError[] = analysis.errors
+        if (copyError) errors.push({ message: copyError, severity: 'error' })
 
         // A failure the log parser found nothing in is the worst possible
         // report: the panel says the build failed and then has nothing to
@@ -158,9 +170,7 @@ export class LatexCompiler {
           pdfPath: success ? finalPdf : null,
           log: logText,
           errors,
-          // Only when the build failed: a successful run can still mention a
-          // file it didn't find on a first pass and then resolved.
-          missingPackages: success ? [] : missingPackagesFromLog(logText),
+          missingPackages: analysis.missingPackages,
           durationMs: Date.now() - start
         }
         try {

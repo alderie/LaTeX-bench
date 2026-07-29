@@ -121,11 +121,24 @@ export function PdfPreview(): React.JSX.Element {
   const [zoom, setZoom] = useState(1)
   const [fitWidth, setFitWidth] = useState(true)
   const [visiblePage, setVisiblePage] = useState(1)
+  // A rebuild landing on a preview that already shows something. Distinct
+  // from `loading`, which is the state where there is nothing to look at.
+  const [refreshing, setRefreshing] = useState(false)
 
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const pagesRef = useRef<HTMLDivElement | null>(null)
   // The live zoom during a wheel gesture, which runs ahead of React.
   const zoomRef = useRef(1)
+  // Whether there are pages on screen right now. A rebuild is a very
+  // different event depending on the answer — see the load effect.
+  const paintedRef = useRef(false)
+
+  // A different paper has nothing in common with what is on screen, so the
+  // next build genuinely is a first load. Declared before the loader so it
+  // runs first when `paperId` changes.
+  useEffect(() => {
+    paintedRef.current = false
+  }, [paperId])
 
   // ── Load ────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -138,12 +151,21 @@ export function PdfPreview(): React.JSX.Element {
     let opened: PdfDocument | null = null
 
     void (async () => {
-      setStatus('loading')
+      // Only blank the pane when there is nothing to blank. A rebuild used to
+      // take the same path as opening the app: pages hidden, grey panel, "
+      // Loading the PDF…", then the document back — three states in a few
+      // hundred milliseconds, for a change that is usually one word in one
+      // paragraph. When something is already drawn it stays drawn, dimmed,
+      // until the replacement is ready to swap in whole.
+      if (paintedRef.current) setRefreshing(true)
+      else setStatus('loading')
       try {
         const bytes = await window.latexAPI.readPdf(paperId)
         if (cancelled) return
         if (!bytes || bytes.length === 0) {
           setStatus('empty')
+          setRefreshing(false)
+          paintedRef.current = false
           setLoaded(null)
           return
         }
@@ -164,6 +186,8 @@ export function PdfPreview(): React.JSX.Element {
       } catch (err) {
         if (cancelled) return
         setStatus('error')
+        setRefreshing(false)
+        paintedRef.current = false
         setError((err as Error).message)
       }
     })()
@@ -186,9 +210,18 @@ export function PdfPreview(): React.JSX.Element {
     let cancelled = false
     const tasks: Array<{ cancel(): void }> = []
 
-    void (async () => {
+    // Where the new pages are built. When the pane is already showing a
+    // document — a rebuild, a zoom step — they are built off-screen and
+    // swapped in together at the end, so the reader never sees the blank
+    // canvases fill in one at a time. On a first load there is nothing to
+    // protect, and appending as we go means page one appears immediately
+    // instead of after the last page of a long paper.
+    const swap = paintedRef.current && host.childElementCount > 0
+
+    const draw = async (): Promise<void> => {
       const available = scrollRef.current?.clientWidth ?? 600
-      host.replaceChildren()
+      const target: Node & ParentNode = swap ? document.createDocumentFragment() : host
+      if (!swap) host.replaceChildren()
 
       for (let n = 1; n <= loaded.pages; n++) {
         if (cancelled) return
@@ -224,7 +257,7 @@ export function PdfPreview(): React.JSX.Element {
         canvas.dataset.baseWidth = String(unscaled.width)
         canvas.dataset.baseHeight = String(unscaled.height)
         wrapper.appendChild(canvas)
-        host.appendChild(wrapper)
+        target.appendChild(wrapper)
         // What is actually on screen, which in fit-width is a number nobody
         // chose. A wheel gesture and the +/- buttons both start from here.
         if (n === 1) zoomRef.current = scale
@@ -248,8 +281,35 @@ export function PdfPreview(): React.JSX.Element {
           setError(`Page ${n} failed to render: ${(err as Error).message}`)
           return
         }
+        // From the moment page one is on screen there is something worth not
+        // flashing, even if the paper has forty more pages to go.
+        if (!swap) paintedRef.current = true
       }
-    })()
+
+      if (cancelled) return
+      if (swap) {
+        // Replacing the content resets the scroll when the new document is
+        // shorter, and "my place in the paper jumped on every save" is the
+        // same complaint as the flash, one layer down.
+        const scroller = scrollRef.current
+        const top = scroller?.scrollTop ?? 0
+        const left = scroller?.scrollLeft ?? 0
+        host.replaceChildren(target)
+        if (scroller) {
+          scroller.scrollTop = top
+          scroller.scrollLeft = left
+        }
+      }
+      paintedRef.current = host.childElementCount > 0
+    }
+
+    // In a `finally`, because every early return above — a page that would
+    // not load, a render that threw, a rebuild that landed mid-paint — is a
+    // path out of `draw`, and missing one of them leaves the pane dimmed for
+    // good with no way back.
+    void draw().finally(() => {
+      if (!cancelled) setRefreshing(false)
+    })
 
     return () => {
       cancelled = true
@@ -314,6 +374,10 @@ export function PdfPreview(): React.JSX.Element {
         ? (ZOOM_STOPS[index] ?? ZOOM_STOPS[ZOOM_STOPS.length - 1])
         : ([...ZOOM_STOPS].reverse().find((stop) => stop < current - 0.001) ?? ZOOM_STOPS[0])
     zoomRef.current = next
+    // Resize what is on screen now, the way the wheel gesture does. The
+    // re-render at the new scale is what makes it sharp, but it takes a
+    // moment, and a button that does nothing for that moment reads as broken.
+    applyCssZoom(pagesRef.current, next)
     setFitWidth(false)
     setZoom(next)
   }
@@ -446,7 +510,13 @@ export function PdfPreview(): React.JSX.Element {
             <span className="pdf-preview__error-detail">{error}</span>
           </div>
         )}
-        <div className="pdf-preview__pages-host" ref={pagesRef} hidden={status !== 'ready'} />
+        <div
+          className={
+            'pdf-preview__pages-host' + (refreshing ? ' pdf-preview__pages-host--refreshing' : '')
+          }
+          ref={pagesRef}
+          hidden={status !== 'ready'}
+        />
       </div>
     </div>
   )

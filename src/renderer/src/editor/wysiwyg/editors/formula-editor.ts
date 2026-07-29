@@ -2,8 +2,11 @@ import katex from 'katex'
 import {
   addColumn,
   addRow,
-  ENV_CHOICES,
+  choiceFor,
+  ENV_FAMILIES,
   errorOffset,
+  familyOf,
+  isNumberedChoice,
   gridCells,
   gridSpans,
   nextCell,
@@ -34,7 +37,7 @@ import { markMathCells } from '../renderers/math-cells'
 import { CellEditor, type CellSite } from './cell-editor'
 import { CodeField } from './code-field'
 import { EditHistory } from './edit-history'
-import { EditorPanel, panelName } from './editor-panel'
+import { EditorPanel, panelName, panelToggle } from './editor-panel'
 
 // The formula editing surface.
 //
@@ -101,6 +104,16 @@ export class FormulaEditor {
   private preview: HTMLElement | null = null
   private completions: CompletionPopup | null = null
   private envDropdown: Dropdown | null = null
+  private numberToggle: { dom: HTMLElement; set: (next: boolean) => void } | null = null
+  /**
+   * How this document writes an unnumbered display equation.
+   *
+   * `\[…\]` and `equation*` are the same thing, and which one appears in a
+   * given paper is the author's habit. Remembering it means the numbering
+   * toggle is reversible rather than a one-way conversion to whichever form
+   * this file happened to prefer.
+   */
+  private readonly plainDisplay: string
   private cellEditor: CellEditor | null = null
   private cells: CellSite[] = []
   private history: EditHistory<FormulaState>
@@ -127,6 +140,7 @@ export class FormulaEditor {
     this.initialBody = presentBody(this.shell)
     this.initialChoice = shellChoice(this.shell)
     this.initialLabel = this.shell.label
+    this.plainDisplay = this.initialChoice === 'equation*' ? 'equation*' : '\\['
 
     this.panel = new EditorPanel({
       variant: 'formula',
@@ -213,25 +227,63 @@ export class FormulaEditor {
       // switching environment rewrites the body, and doing that once per
       // keypress while the author scans the list would be destructive.
       this.envDropdown = createDropdown({
-        options: ENV_CHOICES,
-        value: choice,
+        options: ENV_FAMILIES,
+        value: familyOf(choice),
         className: 'block-editor__env',
-        title: 'Environment',
-        onChange: (value) => this.switchEnv(value)
+        title: 'Shape',
+        onChange: (family) => this.switchEnv(choiceFor(family, this.numbered(), this.plainDisplay))
       })
       this.panel.addControl(this.envDropdown.dom)
+
+      // The other half of what the list used to carry, as the yes/no it is.
+      // `(1)` rather than a word because that is what a numbered equation
+      // puts in the margin, and the control looks like its own effect.
+      this.numberToggle = panelToggle(
+        '(1)',
+        (on) =>
+          on ? 'Numbered — click to remove the number' : 'Not numbered — click to number it',
+        this.numbered(),
+        (next) => this.setNumbered(next)
+      )
+      this.panel.addControl(this.numberToggle.dom)
     } else if (this.shell.kind === 'env') {
       this.panel.addControl(panelName(this.shell.env))
     }
 
-    if (this.shell.label !== null || this.canCarryLabel()) {
+    // Built once and hidden when it doesn't apply, rather than added and
+    // removed: the numbering toggle changes whether it applies, and rebuilding
+    // the bar under the author's pointer mid-edit is how a control moves out
+    // from under a click.
+    if (this.shell.label !== null || choice !== null || this.canCarryLabel()) {
       this.panel.addControl(this.buildLabelField())
     }
+  }
+
+  /** Whether the equation currently carries a number. */
+  private numbered(): boolean {
+    const choice = shellChoice(this.shell)
+    return choice === null
+      ? this.shell.kind === 'env' && !this.shell.starred
+      : isNumberedChoice(choice)
   }
 
   /** Numbered environments are the ones worth referring to by label. */
   private canCarryLabel(): boolean {
     return this.shell.kind === 'env' && !this.shell.starred
+  }
+
+  /**
+   * Turn numbering on or off, keeping the shape.
+   *
+   * An unnumbered equation with a `\label` on it is a cross-reference that
+   * compiles to `??`, so the label field goes away with the number — the text
+   * stays in the shell until the edit is committed, which means flipping back
+   * within one edit gets it back.
+   */
+  private setNumbered(next: boolean): void {
+    const choice = shellChoice(this.shell)
+    if (choice === null) return
+    this.switchEnv(choiceFor(familyOf(choice), next, this.plainDisplay))
   }
 
   /**
@@ -260,6 +312,9 @@ export class FormulaEditor {
     this.reflectLabel = () => {
       input.value = this.shell.label ?? ''
       wrap.classList.toggle('block-editor__label--set', input.value.trim() !== '')
+      // A `\label` on an unnumbered equation gives `??` wherever it is
+      // referenced, so the field is only offered where it means something.
+      wrap.hidden = !this.canCarryLabel()
     }
     this.reflectLabel()
     input.addEventListener('input', () => {
@@ -323,9 +378,9 @@ export class FormulaEditor {
     this.shell = state.shell
     this.code.value = state.body
     // The bar is showing the old wrapper: an undone environment switch has to
-    // move the dropdown back, and an undone rename the label field.
-    this.envDropdown?.setValue(shellChoice(this.shell) ?? '')
-    this.reflectLabel?.()
+    // move the dropdown and the numbering toggle back, and an undone rename
+    // the label field.
+    this.reflectBar()
     this.paint()
     this.field.focus()
     this.field.setSelectionRange(caret, caret)
@@ -340,9 +395,18 @@ export class FormulaEditor {
     const result = switchEnvironment(this.shell, choice, this.field.value)
     this.shell = result.shell
     this.code.value = result.body
+    this.reflectBar()
     this.remember()
     this.schedulePaint()
     this.focus()
+  }
+
+  /** Put the bar back in step with the shell, after a switch or an undo. */
+  private reflectBar(): void {
+    const choice = shellChoice(this.shell)
+    if (choice !== null) this.envDropdown?.setValue(familyOf(choice))
+    this.numberToggle?.set(this.numbered())
+    this.reflectLabel?.()
   }
 
   // ── The cells in the rendering ───────────────────────────────────────
@@ -733,7 +797,9 @@ class CompletionPopup {
 
   private highlight(): void {
     const rows = this.dom.querySelectorAll('.math-complete__item')
-    rows.forEach((row, i) => row.classList.toggle('math-complete__item--active', i === this.selected))
+    rows.forEach((row, i) =>
+      row.classList.toggle('math-complete__item--active', i === this.selected)
+    )
   }
 }
 
@@ -773,7 +839,9 @@ function userMacroNames(): string[] {
  * marker after it. Anchoring to the field's corner instead would be simpler,
  * but the list would sit a line and a half from what it is completing.
  */
-function caretPoint(field: HTMLInputElement | HTMLTextAreaElement): { left: number; top: number } | null {
+function caretPoint(
+  field: HTMLInputElement | HTMLTextAreaElement
+): { left: number; top: number } | null {
   const rect = field.getBoundingClientRect()
   if (rect.width === 0 && rect.height === 0) return null
   const caret = field.selectionStart ?? field.value.length

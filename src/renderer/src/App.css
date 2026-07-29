@@ -854,9 +854,13 @@ body.is-resizing-preview {
 
 .build-panel__tabs {
   display: flex;
+  align-items: center;
   gap: 2px;
   padding: 5px 10px 0;
   flex-shrink: 0;
+}
+.build-panel__tabs-spacer {
+  flex: 1;
 }
 .build-panel__tab {
   display: inline-flex;
@@ -960,9 +964,6 @@ body.is-resizing-preview {
   background: var(--bg-secondary);
   font-size: 11.5px;
 }
-.tex-install--ready {
-  border-color: color-mix(in srgb, var(--status-ok) 35%, var(--border-color));
-}
 .tex-install--busy {
   border-color: color-mix(in srgb, var(--editor-cursor) 40%, var(--border-color));
 }
@@ -1047,6 +1048,85 @@ body.is-resizing-preview {
   color: var(--text-tertiary);
   font-size: 11px;
   line-height: 1.45;
+}
+
+/* ── The managed-installation chip ────────────────────────────────────
+   Sized and coloured to read as furniture rather than as news: it is the
+   answer to a question nobody is asking while they look at a build failure.
+   The detail and the two buttons live in a popover under it. */
+.tex-chip {
+  position: relative;
+  display: inline-flex;
+}
+.tex-chip__button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.tex-chip__button:hover,
+.tex-chip__button--open {
+  background: var(--overlay-hover);
+  color: var(--text-secondary);
+}
+.tex-chip__ok {
+  color: var(--status-ok);
+  flex-shrink: 0;
+}
+.tex-chip__meta {
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+.tex-chip__panel {
+  position: absolute;
+  top: calc(100% + 5px);
+  right: 0;
+  z-index: 400;
+  width: 290px;
+  padding: 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+}
+.tex-chip__detail {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+}
+/* The folder it all lives in. Truncated rather than wrapped: the useful part
+   of a long path is the end, and the whole of it is in the tooltip.
+
+   `direction: rtl` is what moves the ellipsis to the front, and on its own it
+   also reorders the text: a path beginning `/root` came out as
+   `root/.config/…/texlive/`, with the leading slash swung round to the end.
+   The `<bdi>` inside is what keeps the characters in their own direction
+   while the box still overflows at its start. */
+.tex-chip__path {
+  margin: 6px 0 0;
+  direction: rtl;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+.tex-chip__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
 }
 
 /* A determinate bar, because the package counter makes it determinate. An
@@ -1141,6 +1221,26 @@ body.is-resizing-preview {
   /* Wide enough for the widest page, so zooming past the pane's width
      scrolls sideways instead of centring the page half outside the box. */
   min-width: min-content;
+  transition:
+    opacity 220ms ease,
+    filter 220ms ease;
+}
+/* A rebuild is in flight and the pages on screen are the previous one's.
+   Enough of a change to say "this is being redone" and not enough to be an
+   event — the alternative, and what this replaced, was blanking the pane to
+   grey and putting the document back a moment later, which for a one-word
+   edit in a paragraph is a lot of theatre for very little news. */
+.pdf-preview__pages-host--refreshing {
+  opacity: 0.45;
+  filter: blur(1.5px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pdf-preview__pages-host {
+    transition: none;
+  }
+  .pdf-preview__pages-host--refreshing {
+    filter: none;
+  }
 }
 
 /* The page keeps a white ground and a shadow in both themes: a PDF is a
@@ -1893,6 +1993,11 @@ body.is-resizing-preview {
 /* The label is the only control here you type into, and an empty one is the
    difference between an equation you can \ref and one you can't — so it gets
    a caption and a field that looks like a field. */
+/* `hidden` alone loses to `display: inline-flex`, and this field is hidden
+   whenever the equation isn't numbered. */
+.block-editor__label[hidden] {
+  display: none;
+}
 .block-editor__label {
   display: inline-flex;
   align-items: center;
@@ -2093,6 +2198,49 @@ body.is-resizing-preview {
 .block-editor__button[hidden] {
   display: none;
 }
+/* The numbering switch. Text rather than a glyph, because `(1)` is exactly
+   what a numbered equation puts in the margin — the control looks like its
+   own effect, which no icon of a hash or a list would. */
+.block-editor__toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  min-width: 32px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-family: var(--font-serif);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease,
+    border-color 0.12s ease,
+    opacity 0.12s ease;
+  /* Off reads as "this equation has no number", so the control is faded
+     rather than merely unfilled — an outline at full strength claims the
+     number is there. */
+  opacity: 0.55;
+}
+.block-editor__toggle:hover {
+  background: var(--overlay-hover);
+  color: var(--text-primary);
+  opacity: 1;
+}
+.block-editor__toggle--on {
+  background: var(--overlay-hover);
+  border-color: var(--border-color);
+  color: var(--text-primary);
+  opacity: 1;
+}
+.block-editor__toggle--on:hover {
+  border-color: var(--text-tertiary);
+}
+
 /* A pressed toggle, not a call to action: the accent fill made this the
    loudest thing in a panel whose subject is the formula. */
 .block-editor__button--on {
@@ -3112,14 +3260,27 @@ td.source-cell--editing:hover {
   opacity: 1;
 }
 /* The preamble runs to dozens of lines; let the panel scroll rather than
-   pushing the first paragraph of the paper off the screen. */
+   pushing the first paragraph of the paper off the screen.
+
+   The *field* scrolls, not the wrapper around it. This looks like a detail
+   and isn't: the highlight layer is `position: absolute; inset: 0` against
+   the wrapper, and an absolutely positioned child of a scroll container is
+   sized to the box you can see rather than to the content you can scroll. So
+   with the overflow on the wrapper, the coloured copy of the text was one
+   screenful tall, pinned to the top of the content, and scrolled away with
+   it — leaving the rest of the preamble painted by nothing at all. The
+   textarea's own glyphs are transparent, so what a reader saw was a document
+   that stopped after ten lines and then had half a screen of blank space
+   under it, scrollable, with no empty lines anywhere in the source.
+
+   Capping the textarea instead keeps the two layers exactly the same size,
+   which is the arrangement `CodeField.syncScroll` exists to serve. */
 .block-editor--preamble .code-field {
   --code-field-padding: 8px 14px 14px;
-  max-height: 55vh;
-  overflow-y: auto;
 }
 .block-editor--preamble .code-field__input {
-  overflow: hidden;
+  max-height: 55vh;
+  overflow-y: auto;
 }
 
 /* ── Table editor ────────────────────────────────────────────────────
@@ -3128,15 +3289,17 @@ td.source-cell--editing:hover {
    and what you will get cannot drift apart. */
 .block-editor--tabular .code-field {
   --code-field-padding: 6px 16px 14px;
+}
+/* Same arrangement as the preamble above, and for the same reason — a long
+   table body ran off the end of its own highlighting. */
+.block-editor--tabular .code-field__input {
   max-height: 45vh;
   overflow-y: auto;
 }
-.block-editor--tabular .code-field__input,
-.block-editor--raw .code-field__input {
-  overflow: hidden;
-}
 .block-editor--raw .code-field {
   --code-field-padding: 6px 16px 14px;
+}
+.block-editor--raw .code-field__input {
   max-height: 55vh;
   overflow-y: auto;
 }
@@ -4354,14 +4517,20 @@ td.source-cell--editing:hover {
   --code-field-padding: 10px 16px 14px;
   font-size: 0.82em;
   line-height: 1.55;
-  max-height: 55vh;
-  overflow: auto;
 }
-.code-field--code .code-field__input {
+/* Both layers, not just the field. `white-space` decides where a long line
+   breaks, so the two disagreeing means the colour lands on different
+   characters than the caret does — and the cap lives here rather than on the
+   wrapper for the reason spelled out beside the preamble editor. */
+.code-field--code .code-field__input,
+.code-field--code .code-field__highlight {
   white-space: pre;
   word-break: normal;
-  overflow: auto;
   tab-size: 4;
+}
+.code-field--code .code-field__input {
+  max-height: 55vh;
+  overflow: auto;
 }
 
 /* ── Floats (table, algorithm, figure) and layout containers ──────────

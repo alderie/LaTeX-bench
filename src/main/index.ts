@@ -5,6 +5,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import type { AppSettings, McpStatusInfo } from '../shared/types'
 import { initStores, whenStoresReady, getSettingsStore, PaperStoreManager } from './store'
 import { registerPaperProtocol } from './paper/protocol'
+import { stopLogAnalysis } from './latex/log-analysis'
 
 // Type-only imports keep heavy modules out of cold-start.
 import type { McpPaperServer } from './mcp/mcp-server'
@@ -339,6 +340,7 @@ function cleanupServices(): void {
   if (compiler) compiler.destroy()
   if (texInstaller) texInstaller.destroy()
   if (mcpServer) mcpServer.stop().catch(() => undefined)
+  stopLogAnalysis()
 }
 
 app.on('before-quit', cleanupServices)

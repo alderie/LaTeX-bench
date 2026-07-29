@@ -12,6 +12,13 @@ export default defineConfig({
       minify: 'esbuild',
       target: 'node22',
       rollupOptions: {
+        // Two entries, not one. `log-worker` is loaded by path at runtime
+        // through `worker_threads`, so it has to exist as its own file beside
+        // the main bundle rather than being inlined into it.
+        input: {
+          index: resolve('src/main/index.ts'),
+          'log-worker': resolve('src/main/latex/log-worker.ts')
+        },
         // Heavy Node-only deps stay as runtime requires (lazy-loaded via the
         // dynamic-import accessors in src/main/index.ts) so the cold-parsed
         // main bundle stays small.

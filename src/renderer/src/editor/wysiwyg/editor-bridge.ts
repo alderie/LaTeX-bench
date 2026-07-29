@@ -4,6 +4,12 @@ import type { Node as PMNode, ResolvedPos } from 'prosemirror-model'
 import type { EditorView } from 'prosemirror-view'
 import { toggleMark } from 'prosemirror-commands'
 import { latexSchema } from './schema'
+import {
+  activeListKind,
+  insertList as insertListCommand,
+  toggleList as toggleListCommand,
+  type ListKind
+} from './lists'
 
 // A narrow channel between the React chrome (the toolbar) and the
 // ProseMirror view, which lives outside React entirely.
@@ -65,23 +71,17 @@ export interface SelectionState {
   marks: string[]
   /** The kind of block the caret is in. */
   block: BlockKind
+  /** The list the caret is inside, innermost first, or null for none. */
+  list: ListKind | null
   /** True when there is an editor to act on at all. */
   ready: boolean
 }
 
-const EMPTY_SELECTION: SelectionState = { marks: [], block: 'other', ready: false }
+const EMPTY_SELECTION: SelectionState = { marks: [], block: 'other', list: null, ready: false }
 
 export const useEditorSelection = create<SelectionState>(() => EMPTY_SELECTION)
 
-const TRACKED_MARKS = [
-  'strong',
-  'em',
-  'code',
-  'smallcaps',
-  'underline',
-  'superscript',
-  'subscript'
-]
+const TRACKED_MARKS = ['strong', 'em', 'code', 'smallcaps', 'underline', 'superscript', 'subscript']
 
 /** Marks that would apply to text typed at the current selection. */
 function activeMarks(state: EditorState): string[] {
@@ -112,7 +112,7 @@ function activeBlock(state: EditorState): BlockKind {
   const depth = headingDepth($from)
   if (depth !== null) {
     const level = $from.node(depth).attrs.level as number
-    return (Math.min(5, Math.max(1, level)) as 1 | 2 | 3 | 4 | 5)
+    return Math.min(5, Math.max(1, level)) as 1 | 2 | 3 | 4 | 5
   }
   // Only a paragraph that could *become* a heading counts as body text — one
   // inside a float or a list item can't be promoted, because a `\section`
@@ -135,16 +135,18 @@ function canHoldSection($from: ResolvedPos): boolean {
 export function publishSelection(state: EditorState): void {
   const marks = activeMarks(state)
   const block = activeBlock(state)
+  const list = activeListKind(state)
   const previous = useEditorSelection.getState()
   if (
     previous.ready &&
     previous.block === block &&
+    previous.list === list &&
     previous.marks.length === marks.length &&
     previous.marks.every((m, i) => m === marks[i])
   ) {
     return
   }
-  useEditorSelection.setState({ marks, block, ready: true })
+  useEditorSelection.setState({ marks, block, list, ready: true })
 }
 
 // ── Commands the toolbar runs ──────────────────────────────────────────
@@ -238,10 +240,10 @@ function promoteParagraph(view: EditorView, $from: ResolvedPos, level: number): 
   for (let i = index + 1; i < container.childCount; i++) following.push(container.child(i))
 
   const title = latexSchema.nodes.sectionTitle.create({ level }, paragraph.content)
-  const section = latexSchema.nodes.section.create(
-    { id: '', level, starred: false, labels: [] },
-    [title, ...following]
-  )
+  const section = latexSchema.nodes.section.create({ id: '', level, starred: false, labels: [] }, [
+    title,
+    ...following
+  ])
 
   const from = $from.before(depth)
   const tr = view.state.tr.replaceWith(from, $from.end(depth - 1), section)
@@ -303,21 +305,22 @@ export function insertDisplayMath(): void {
   view.focus()
 }
 
-/** Wrap the paragraph the cursor is in as a single-item list. */
-export function insertList(kind: 'itemize' | 'enumerate'): void {
-  const view = activeView
-  if (!view) return
-  const { $from } = view.state.selection
-  if ($from.parent.type.name !== 'paragraph') return
-  const paragraph = $from.parent
-  const item = latexSchema.nodes.listItem.create({ marker: null }, [paragraph])
-  const list = latexSchema.nodes.listBlock.create({ kind, options: '' }, [item])
-  const start = $from.before()
-  const tr = view.state.tr.replaceWith(start, start + paragraph.nodeSize, list)
-  // Put the caret back inside the text that just became an item.
-  tr.setSelection(TextSelection.near(tr.doc.resolve(Math.min(start + 2, tr.doc.content.size))))
-  view.dispatch(tr.scrollIntoView())
-  view.focus()
+/**
+ * Make a list, change which kind it is, or leave it.
+ *
+ * One button, because that is how the author thinks about it: the bulleted
+ * button turns a paragraph into bullets, turns a numbered list into bullets,
+ * and — pressed inside a bulleted list — gives the paragraph back. Its
+ * predecessor could only ever do the first, so the way out of a list was to
+ * switch to Source view.
+ */
+export function toggleList(kind: ListKind): void {
+  run(toggleListCommand(kind))
+}
+
+/** Insert a list and put the caret in its first item. */
+export function insertList(kind: ListKind): void {
+  run(insertListCommand(kind))
 }
 
 /** Open the slash menu's insert flow by typing the trigger for the user. */

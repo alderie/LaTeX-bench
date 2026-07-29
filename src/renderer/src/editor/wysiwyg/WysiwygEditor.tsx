@@ -21,6 +21,7 @@ import { codeBlockNodeView } from './nodeviews/CodeBlockNodeView'
 import { captionNodeView } from './nodeviews/CaptionNodeView'
 import { footnoteNodeView } from './nodeviews/FootnoteNodeView'
 import { mathInlineInputRule, mathBlockInputRule } from './inputRules'
+import { bulletListRule, listKeymap, orderedListRule, toggleList } from './lists'
 import { slashMenu } from './slashMenu'
 import { richFind } from './find-replace'
 import { blockDeleteKeymap, blockHandle } from './block-delete'
@@ -75,12 +76,24 @@ export function WysiwygEditor(): React.JSX.Element {
           // picks a menu item into a paragraph split before the menu ever
           // sees the key.
           slashMenu(),
-          inputRules({ rules: [mathInlineInputRule, mathBlockInputRule] }),
+          inputRules({
+            rules: [mathInlineInputRule, mathBlockInputRule, bulletListRule, orderedListRule]
+          }),
           keymap({ 'Mod-z': undo, 'Mod-y': redo, 'Mod-Shift-z': redo }),
+          keymap({
+            // The pair every editor binds these to, so muscle memory works.
+            'Mod-Shift-8': () => (toggleList('itemize'), true),
+            'Mod-Shift-7': () => (toggleList('enumerate'), true)
+          }),
           // Ahead of the base keymap, which answers Backspace with
           // `joinBackward` — a no-op at the top of a `defining` block like a
           // theorem, so an emptied one could never be got rid of.
           keymap(blockDeleteKeymap),
+          // After the block-delete keymap so Backspace in a list that is
+          // *entirely* empty removes the list rather than outdenting inside
+          // it, and before the base keymap so Enter splits the item rather
+          // than the paragraph inside it.
+          keymap(listKeymap),
           keymap(baseKeymap),
           blockHandle(),
           richFind(),

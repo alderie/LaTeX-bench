@@ -25,9 +25,9 @@ import {
   getActiveEditorView,
   insertDisplayMath,
   insertInlineMath,
-  insertList,
   openInsertMenu,
   toggleEditorMark,
+  toggleList,
   useEditorSelection
 } from '../editor/wysiwyg/editor-bridge'
 
@@ -94,7 +94,7 @@ export function EditorToolbar(): React.JSX.Element | null {
   const toggleOutline = useUiStore((s) => s.toggleOutline)
   const previewOpen = useUiStore((s) => s.previewOpen)
   const togglePreview = useUiStore((s) => s.togglePreview)
-  const { marks, block, ready } = useEditorSelection()
+  const { marks, block, list, ready } = useEditorSelection()
 
   // The formatting half only makes sense against the rich editor; source
   // mode has CodeMirror's own keybindings.
@@ -136,27 +136,31 @@ export function EditorToolbar(): React.JSX.Element | null {
           <div className="editor-toolbar__divider" />
 
           <div className="editor-toolbar__group">
-            <ToolbarButton title="Inline formula  ($…$)" disabled={!ready} onClick={insertInlineMath}>
+            <ToolbarButton
+              title="Inline formula  ($…$)"
+              disabled={!ready}
+              onClick={insertInlineMath}
+            >
               <Sigma size={14} />
             </ToolbarButton>
-            <ToolbarButton
-              title="Display equation"
-              disabled={!ready}
-              onClick={insertDisplayMath}
-            >
+            <ToolbarButton title="Display equation" disabled={!ready} onClick={insertDisplayMath}>
               <SquareSigma size={14} />
             </ToolbarButton>
+            {/* Toggles, not inserts: lit when the caret is in one, and
+                pressing a lit one takes the paragraph back out. */}
             <ToolbarButton
-              title="Bulleted list  (itemize)"
+              title="Bulleted list  (itemize · Ctrl/Cmd Shift 8)"
+              active={list === 'itemize'}
               disabled={!ready}
-              onClick={() => insertList('itemize')}
+              onClick={() => toggleList('itemize')}
             >
               <List size={14} />
             </ToolbarButton>
             <ToolbarButton
-              title="Numbered list  (enumerate)"
+              title="Numbered list  (enumerate · Ctrl/Cmd Shift 7)"
+              active={list === 'enumerate'}
               disabled={!ready}
-              onClick={() => insertList('enumerate')}
+              onClick={() => toggleList('enumerate')}
             >
               <ListOrdered size={14} />
             </ToolbarButton>
@@ -172,7 +176,11 @@ export function EditorToolbar(): React.JSX.Element | null {
           <div className="editor-toolbar__divider" />
 
           <div className="editor-toolbar__group">
-            <ToolbarButton title="Undo  (Ctrl/Cmd Z)" disabled={!ready} onClick={runHistory('undo')}>
+            <ToolbarButton
+              title="Undo  (Ctrl/Cmd Z)"
+              disabled={!ready}
+              onClick={runHistory('undo')}
+            >
               <Undo2 size={14} />
             </ToolbarButton>
             <ToolbarButton

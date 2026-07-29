@@ -46,6 +46,21 @@ function chooseEnv(editor: FormulaEditor, value: string): void {
   option.dispatchEvent(down())
 }
 
+/** Click the `(1)` switch that decides whether the equation is numbered. */
+function toggleNumbering(editor: FormulaEditor): void {
+  const toggle = editor.dom.querySelector('.block-editor__toggle') as HTMLButtonElement
+  toggle.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+}
+
+/** The values the shape list offers, in order. */
+function envOptions(editor: FormulaEditor): string[] {
+  const button = editor.dom.querySelector('.ui-dropdown__button') as HTMLButtonElement
+  button.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+  return [...document.querySelectorAll<HTMLElement>('.ui-dropdown__option')].map(
+    (row) => row.dataset.value ?? ''
+  )
+}
+
 describe('formula editor', () => {
   beforeEach(() => {
     document.body.replaceChildren()
@@ -83,17 +98,21 @@ describe('formula editor', () => {
     const { field, commit } = open()
     field.value = 'a = b'
     press(field, 'Enter', { metaKey: true })
-    expect(commit).toHaveBeenCalledWith('\\begin{equation}\n  \\label{eq:bregman}\n  a = b\n\\end{equation}')
+    expect(commit).toHaveBeenCalledWith(
+      '\\begin{equation}\n  \\label{eq:bregman}\n  a = b\n\\end{equation}'
+    )
   })
 
-  it('unnumbers an equation from the dropdown, not by retyping', () => {
+  it('unnumbers an equation from the toggle, not by retyping', () => {
     const { editor, field, commit } = open()
-    chooseEnv(editor, 'equation*')
+    toggleNumbering(editor)
     press(field, 'Enter', { metaKey: true })
 
     const [source] = commit.mock.calls[0]
-    expect(source).toContain('\\begin{equation*}')
-    expect(source).toContain('\\end{equation*}')
+    // `\[…\]` is amsmath's unnumbered display and what this document would
+    // have been written with; `equation*` is the same environment.
+    expect(source).toContain('\\[')
+    expect(source).toContain('\\]')
     expect(source).toContain('D_\\psi(x, y)')
   })
 
@@ -340,6 +359,58 @@ describe('formula editor', () => {
       undo(editor)
       expect(cancel).not.toHaveBeenCalled()
       expect(commit).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('the shape list and the numbering switch', () => {
+    // The list used to hold nine rows: Display, Equation, Equation, Align,
+    // Align, Gather, Gather, Multline, Multline — five duplicate labels told
+    // apart by a grey "numbered" at the far edge, plus `\[` and `equation*`
+    // offered as two choices for the same environment. Four shapes and a
+    // switch is the same expressive power with none of the reading.
+
+    it('offers one row per shape, not one per shape and numbering', () => {
+      const { editor } = open()
+      expect(envOptions(editor)).toEqual(['equation', 'align', 'gather', 'multline'])
+    })
+
+    it('keeps the shape when numbering is switched off', () => {
+      const { editor, field, commit } = open('\\begin{align}\n  a &= b\n\\end{align}')
+      toggleNumbering(editor)
+      press(field, 'Enter', { metaKey: true })
+      expect(commit.mock.calls[0][0]).toContain('\\begin{align*}')
+    })
+
+    it('keeps the numbering when the shape is switched', () => {
+      const { editor, field, commit } = open('\\begin{align*}\n  a &= b\n\\end{align*}')
+      chooseEnv(editor, 'gather')
+      press(field, 'Enter', { metaKey: true })
+      expect(commit.mock.calls[0][0]).toContain('\\begin{gather*}')
+    })
+
+    it('gives back the source it was handed when numbering is toggled twice', () => {
+      // `\[…\]` and `equation*` are the same environment, so "unnumbered" has
+      // two spellings and picking the wrong one rewrites the author's file
+      // for no reason. Which one this document uses is remembered.
+      const starred = '\\begin{equation*}\n  a = b\n\\end{equation*}'
+      const { editor, field, commit } = open(starred)
+      toggleNumbering(editor)
+      toggleNumbering(editor)
+      press(field, 'Enter', { metaKey: true })
+      expect(commit.mock.calls[0][0]).toContain('\\begin{equation*}')
+      expect(commit.mock.calls[0][0]).not.toContain('\\[')
+    })
+
+    it('hides the label field on an equation that has no number to refer to', () => {
+      // A `\label` on an unnumbered equation compiles, and every `\ref` to it
+      // comes out as `??`.
+      const { editor } = open()
+      const label = editor.dom.querySelector('.block-editor__label') as HTMLElement
+      expect(label.hidden).toBe(false)
+      toggleNumbering(editor)
+      expect(label.hidden).toBe(true)
+      toggleNumbering(editor)
+      expect(label.hidden).toBe(false)
     })
   })
 

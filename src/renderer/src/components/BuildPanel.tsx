@@ -15,7 +15,7 @@ import type { BuildError } from '@shared/types'
 import { usePaperStore } from '../stores/paperStore'
 import { useUiStore } from '../stores/uiStore'
 import { jumpToLine } from '../editor/navigate'
-import { MissingPackagesCard, TexInstallCard, TexInstallChip, useTexState } from './TexInstallCard'
+import { MissingPackagesCard, TexInstallChip, useTexState } from './TexInstallCard'
 
 // What the compiler said.
 //
@@ -158,14 +158,14 @@ export function BuildPanel(): React.JSX.Element | null {
               Log
             </button>
             <span className="build-panel__tabs-spacer" />
-            {/* A status, so it rides in the tab row rather than taking two
-                lines off the top of the problem list. */}
+            {/* Every state of the app's TeX — missing, installing, installed,
+                failed — in the same one line of the row, rather than a card
+                that takes two lines off the top of the problem list. */}
             <TexInstallChip />
           </div>
 
-          {/* Above the problem list, because when either shows at all it is
-              the answer to every problem in that list. */}
-          <TexInstallCard />
+          {/* Above the problem list, because this one *is* an answer to a
+              problem in that list. */}
           <MissingPackagesCard />
 
           {showLog ? <BuildLog /> : <ProblemList errors={errors} />}

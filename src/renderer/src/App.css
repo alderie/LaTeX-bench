@@ -1050,31 +1050,43 @@ body.is-resizing-preview {
   line-height: 1.45;
 }
 
-/* ── The managed-installation chip ────────────────────────────────────
-   Sized and coloured to read as furniture rather than as news: it is the
-   answer to a question nobody is asking while they look at a build failure.
-   The detail and the two buttons live in a popover under it. */
+/* ── The TeX chip ──────────────────────────────────────────────────────
+   Every state of the app's own LaTeX in one line of the build panel's tab
+   row: none installed, installing, installed, failed. Quiet when there is
+   nothing to do and loud when there is — an installed distribution is the
+   answer to a question nobody is asking while they read a build failure, but
+   "no engine" is the reason there is a build failure at all. */
 .tex-chip {
   position: relative;
   display: inline-flex;
+  min-width: 0;
 }
 .tex-chip__button {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  min-width: 0;
+  max-width: 360px;
   padding: 3px 8px;
-  border: none;
+  border: 1px solid transparent;
   border-radius: 5px;
   background: transparent;
   color: var(--text-tertiary);
   font-family: inherit;
   font-size: 11px;
   cursor: pointer;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease,
+    border-color 0.12s ease;
 }
 .tex-chip__button:hover,
 .tex-chip__button--open {
   background: var(--overlay-hover);
   color: var(--text-secondary);
+}
+.tex-chip__name {
+  white-space: nowrap;
 }
 .tex-chip__ok {
   color: var(--status-ok);
@@ -1084,18 +1096,100 @@ body.is-resizing-preview {
   color: var(--text-tertiary);
   font-variant-numeric: tabular-nums;
   opacity: 0.8;
+  flex-shrink: 0;
 }
+/* The step the installer is on. First thing to give up width, because the
+   label and the percentage either side of it are the parts that always have
+   to be readable. */
+.tex-chip__step {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.75;
+}
+.tex-chip__step::before {
+  content: '· ';
+}
+
+/* No engine is the reason the build failed, so it is styled as the thing to
+   do about it rather than as a note. */
+.tex-chip--missing .tex-chip__button,
+.tex-chip--failed .tex-chip__button {
+  border-color: color-mix(in srgb, var(--status-warn) 45%, var(--border-color));
+  background: color-mix(in srgb, var(--status-warn) 10%, transparent);
+  color: var(--text-secondary);
+}
+.tex-chip--missing .tex-chip__button:hover,
+.tex-chip--failed .tex-chip__button:hover {
+  background: color-mix(in srgb, var(--status-warn) 18%, transparent);
+  color: var(--text-primary);
+}
+.tex-chip--failed .tex-chip__button {
+  border-color: color-mix(in srgb, var(--status-error) 45%, var(--border-color));
+  background: color-mix(in srgb, var(--status-error) 10%, transparent);
+}
+.tex-chip--failed .tex-chip__button:hover {
+  background: color-mix(in srgb, var(--status-error) 18%, transparent);
+}
+.tex-chip--installing .tex-chip__button {
+  border-color: color-mix(in srgb, var(--editor-cursor) 30%, var(--border-color));
+}
+
+/* The progress ring. A ring rather than a bar because the chip is one line
+   and a bar wants one of its own; the number behind it is the same one. */
+.tex-chip__ring {
+  flex-shrink: 0;
+  /* Start the sweep at twelve o'clock rather than at three. */
+  transform: rotate(-90deg);
+}
+.tex-chip__ring-track,
+.tex-chip__ring-fill {
+  fill: none;
+  stroke-width: 2.25;
+}
+.tex-chip__ring-track {
+  stroke: var(--overlay-hover);
+}
+.tex-chip__ring-fill {
+  stroke: var(--editor-cursor);
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.3s ease;
+}
+
+/* The offsets are written by the component, which measures: the chip lives at
+   the bottom of the window, so the panel has to open upwards, and the row it
+   sits in is inside a pane that clips its overflow. See `useAnchoredPosition`.
+
+   `position: fixed` belongs here rather than with those offsets, and the
+   difference is visible: left in the flow for the frame before the first
+   measurement, the panel is a flex child of the chip and three times its
+   width, so it shoves the button left — and the button's rect is exactly what
+   that measurement reads. The panel opened 290px to the left of where it
+   should have been. */
 .tex-chip__panel {
-  position: absolute;
-  top: calc(100% + 5px);
-  right: 0;
+  position: fixed;
+  top: 0;
+  left: 0;
   z-index: 400;
   width: 290px;
+  /* The measurement clamps the offsets; this clamps the size, for a window
+     narrower than the panel wants to be. */
+  max-width: calc(100vw - 16px);
   padding: 10px;
   border: 1px solid var(--border-color);
   border-radius: 8px;
   background: var(--bg-primary);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  overflow-y: auto;
+}
+/* The step in full, where there is room to read it. */
+.tex-chip__step-full {
+  margin: 6px 0 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-tertiary);
+  overflow-wrap: anywhere;
 }
 .tex-chip__detail {
   margin: 0;
@@ -1815,6 +1909,20 @@ body.is-resizing-preview {
   border-radius: 8px;
   background: var(--bg-primary);
   overflow: hidden;
+  /* This is a place you type, so pressing and moving means "select from here
+     to there". Said explicitly because the island this panel sits in is
+     `contenteditable="false"` inside a `contenteditable="true"` root, which
+     Chromium makes a drag source by default — see `block-drag.ts`, which
+     cancels the drag itself. This is what stops the cursor promising one. */
+  user-select: text;
+  -webkit-user-drag: none;
+}
+/* The island itself, whichever node view it belongs to: a formula, a table,
+   the preamble, a raw block. Matching on "contains an open editor" rather
+   than naming each one means a node view added later is covered without
+   having to remember this rule exists. */
+.ProseMirror [contenteditable='false']:has(> .block-editor) {
+  -webkit-user-drag: none;
 }
 /* The bar's controls used to sit at 22px with hairline borders, which read
    as decoration rather than as things to press. At 26px they carry the

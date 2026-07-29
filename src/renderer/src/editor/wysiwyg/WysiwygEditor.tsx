@@ -25,6 +25,7 @@ import { bulletListRule, listKeymap, orderedListRule, toggleList } from './lists
 import { slashMenu } from './slashMenu'
 import { richFind } from './find-replace'
 import { blockDeleteKeymap, blockHandle } from './block-delete'
+import { blockDragGuard } from './block-drag'
 import { notifyEditorUpdate, publishSelection, setActiveEditorView } from './editor-bridge'
 import * as labelRegistry from './labelRegistry'
 import { usePaperStore } from '../../stores/paperStore'
@@ -96,6 +97,7 @@ export function WysiwygEditor(): React.JSX.Element {
           keymap(listKeymap),
           keymap(baseKeymap),
           blockHandle(),
+          blockDragGuard(),
           richFind(),
           markChanges()
         ]
